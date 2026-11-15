@@ -403,3 +403,28 @@ export function findGutter(src) {
   }
   return Math.round(gx / scale);
 }
+
+// Füllt die Seite fast das ganze Bild (Ecken nicht erkennbar), dunkle Randstreifen trotzdem
+// abschneiden (Tisch, Hand, Hintergrund oben/unten/seitlich). → { x, y, w, h } relativ oder null
+export function trimDarkBorders(src) {
+  const gray = grayOf(src, 420, true);
+  const { g, w, h } = gray;
+  const t = otsu(g);
+  const paperRow = (y) => { let n = 0; for (let x = 0; x < w; x++) if (g[y * w + x] > t) n++; return n / w; };
+  const paperCol = (x, y0, y1) => { let n = 0; for (let y = y0; y < y1; y++) if (g[y * w + x] > t) n++; return n / Math.max(1, y1 - y0); };
+  let top = 0, bottom = h - 1;
+  while (top < h * 0.25 && paperRow(top) < 0.5) top++;
+  while (bottom > h * 0.75 && paperRow(bottom) < 0.5) bottom--;
+  let left = 0, right = w - 1;
+  while (left < w * 0.25 && paperCol(left, top, bottom) < 0.5) left++;
+  while (right > w * 0.75 && paperCol(right, top, bottom) < 0.5) right--;
+  // ein paar Pixel Sicherheitsabstand nach innen (Übergangskante)
+  const pad = Math.round(Math.min(w, h) * 0.006);
+  if (top > 0) top = Math.min(h - 1, top + pad);
+  if (bottom < h - 1) bottom = Math.max(0, bottom - pad);
+  if (left > 0) left = Math.min(w - 1, left + pad);
+  if (right < w - 1) right = Math.max(0, right - pad);
+  const area = ((right - left + 1) * (bottom - top + 1)) / (w * h);
+  if (area > 0.97 || area < 0.4) return null;
+  return { x: left / w, y: top / h, w: (right - left + 1) / w, h: (bottom - top + 1) / h };
+}

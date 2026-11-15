@@ -41,19 +41,70 @@ function binarize(g, w, h) {
   return b;
 }
 
-// Zeilenabstand: Periode des Zeilenprofils (Autokorrelation)
-function linePeriod(b, w, h) {
+// Zusammenhängende dunkle Flächen (Buchstaben) → { lab, comps: [{id,x0,x1,y0,y1,n}] }
+function components(b, w, h) {
+  const lab = new Int32Array(w * h);
+  const comps = [];
+  const stack = [];
+  for (let i = 0; i < w * h; i++) {
+    if (!b[i] || lab[i]) continue;
+    const id = comps.length + 1;
+    let x0 = w, x1 = 0, y0 = h, y1 = 0, n = 0;
+    stack.push(i); lab[i] = id;
+    while (stack.length) {
+      const p = stack.pop();
+      const x = p % w, y = (p / w) | 0;
+      n++;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0 && b[p - 1] && !lab[p - 1]) { lab[p - 1] = id; stack.push(p - 1); }
+      if (x < w - 1 && b[p + 1] && !lab[p + 1]) { lab[p + 1] = id; stack.push(p + 1); }
+      if (y > 0 && b[p - w] && !lab[p - w]) { lab[p - w] = id; stack.push(p - w); }
+      if (y < h - 1 && b[p + w] && !lab[p + w]) { lab[p + w] = id; stack.push(p + w); }
+    }
+    comps.push({ id, x0, x1, y0, y1, n });
+  }
+  return { lab, comps };
+}
+
+// Nur Schrift behalten: Papierkörnung (winzige Punkte) und große dunkle Flächen
+// (Tisch, Schatten, Bilder) entfernen. → { b, mh (typische Buchstabenhöhe), letters }
+function textOnly(b, w, h) {
+  const { lab, comps } = components(b, w, h);
+  const cand = comps.filter((c) => c.n >= 6 && c.y1 - c.y0 >= 3 && c.y1 - c.y0 < h * 0.08 && c.x1 - c.x0 < w * 0.25);
+  if (cand.length < 25) return null;
+  const hs = cand.map((c) => c.y1 - c.y0 + 1).sort((a, b2) => a - b2);
+  const mh = hs[Math.floor(hs.length / 2)];
+  // Buchstaben: nicht viel größer als üblich (Initialen bis 5×), nicht zu flach/fleckig
+  const letters = cand.filter((c) => c.y1 - c.y0 + 1 <= mh * 5 && c.y1 - c.y0 + 1 >= mh * 0.35);
+  const keep = new Uint8Array(comps.length + 1);
+  for (const c of letters) keep[c.id] = 1;
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) if (lab[i] && keep[lab[i]]) out[i] = 1;
+  return { b: out, mh, letters };
+}
+
+// Zeilenabstand: Periode des Zeilenprofils (Autokorrelation), gesucht zwischen 1,3× und 6×
+// der Buchstabenhöhe (sonst gewinnt die Papierkörnung)
+function linePeriod(b, w, h, mh = 0) {
   const prof = new Float64Array(h);
   for (let y = 0; y < h; y++) { let s = 0; for (let x = 0; x < w; x++) s += b[y * w + x]; prof[y] = s; }
   let mean = 0;
   for (const v of prof) mean += v;
   mean /= h;
   let best = 0, bestP = 0;
-  for (let p = Math.round(h / 200); p < h / 8; p++) {
+  const pMin = mh ? Math.max(3, Math.round(mh * 1.3)) : Math.round(h / 200);
+  const pMax = mh ? Math.min(h / 3, mh * 6) : h / 8;
+  const sc = [];
+  for (let p = pMin; p < pMax; p++) {
     let s = 0;
     for (let y = 0; y + p < h; y++) s += (prof[y] - mean) * (prof[y + p] - mean);
-    s /= h - p;
-    if (s > best) { best = s; bestP = p; }
+    sc.push([p, s / (h - p)]);
+  }
+  for (const [p, v] of sc) if (v > best) { best = v; bestP = p; }
+  // Grundperiode statt Vielfachem: kleinstes lokales Maximum mit ≥ 70 % des besten Werts
+  for (let i = 1; i < sc.length - 1; i++) {
+    const [p, v] = sc[i];
+    if (v >= best * 0.7 && v >= sc[i - 1][1] && v >= sc[i + 1][1]) { bestP = p; break; }
   }
   return bestP;
 }
@@ -84,9 +135,10 @@ function fitQuad(xs, ys) {
 export function analyzeLines(src, srcW, srcH) {
   const s = Math.min(1, ANALYSIS_W / srcW);
   const w = Math.max(50, Math.round(srcW * s)), h = Math.max(50, Math.round(srcH * s));
-  const g = grayOf(src, w, h);
-  const b = binarize(g, w, h);
-  const L = linePeriod(b, w, h);
+  const t = textOnly(binarize(grayOf(src, w, h), w, h), w, h);
+  if (!t) return null;
+  const b = t.b;
+  const L = linePeriod(b, w, h, t.mh);
   if (!L || L < 6) return null;
   // Waagerecht verschmieren: Lücken bis ~0,9 Zeilenabstand schließen (Wortabstände)
   const gap = Math.round(L * 0.9);
@@ -141,7 +193,8 @@ export function analyzeLines(src, srcW, srcH) {
     if (Math.sqrt(err / xs.length) > L * 0.22) continue;
     lines.push({ fit, x0: c.x0 / w, x1: c.x1 / w });
   }
-  if (lines.length < 4) return null;
+  // schon drei sichere Zeilen reichen (kurze Seiten, Kapitelenden)
+  if (lines.length < 3) return null;
   // Mittlere Höhe jeder Zeile (Ziel) und Ordnung von oben nach unten
   const at = (ln, x) => { const t = Math.min(ln.x1, Math.max(ln.x0, x)); return ln.fit[0] + ln.fit[1] * t + ln.fit[2] * t * t; };
   for (const ln of lines) {
@@ -237,7 +290,9 @@ export function findDropCap(src) {
   const s = Math.min(1, ANALYSIS_W / W);
   const w = Math.max(50, Math.round(W * s)), h = Math.max(50, Math.round(H * s));
   const b = binarize(grayOf(src, w, h), w, h);
-  const L = linePeriod(b, w, h);
+  const t = textOnly(b, w, h);
+  if (!t) return null;
+  const L = linePeriod(t.b, w, h, t.mh);
   if (!L || L < 6) return null;
   const lab = new Int32Array(w * h);
   const comps = [];
