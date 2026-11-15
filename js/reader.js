@@ -3,10 +3,12 @@
 
 import * as db from './db.js';
 import * as profiles from './profiles.js';
-import { h, icon, iconButton, toast, sheet, UrlPool } from './ui.js';
+import { h, icon, iconButton, toast, sheet, UrlPool, download, safeName } from './ui.js';
 import { buildFlow } from './textproc.js';
 import { displayNumbers } from './pagecheck.js';
 import { renderInline } from './rich.js';
+import { ensureBookAccess } from './lock.js';
+import { takeJump } from './search.js';
 
 const SECTION_PAGES = 25; // Buchseiten je gerendertem Abschnitt (hält das Layout schnell)
 const CHARS_PER_MIN = 1300; // ca. 230 Wörter/Minute
@@ -30,6 +32,7 @@ function saveSettings(s) { profiles.saveSettings(s); }
 export async function openReader(root, bookId) {
   let book = await db.getBook(bookId);
   if (!book) { location.hash = '#/'; return; }
+  if (!(await ensureBookAccess(book))) { location.hash = '#/'; return; }
   let pages = await db.getPagesMeta(bookId);
   if (!pages.length) { location.hash = `#/book/${bookId}`; return; }
   const profileId = profiles.currentId();
@@ -45,6 +48,7 @@ export async function openReader(root, bookId) {
   const pool = new UrlPool();
   let flow = [], cum = [], totalChars = 1, sections = [];
   let figMap = new Map();
+  let toc = [];
   let numbers = { labels: [], total: null };
   const figPool = new UrlPool();
   async function loadFigures() {
@@ -91,7 +95,8 @@ export async function openReader(root, bookId) {
     modeBtn,
     iconButton('font', 'Schrift & Darstellung', () => openTypography()),
     iconButton('search', 'Im Buch suchen', () => openSearch()),
-    iconButton('list', 'Lesezeichen & Seiten', () => openContents()),
+    iconButton('speaker', 'Vorlesen', () => { closeMenu(); tts.toggle(); }),
+    iconButton('list', 'Inhalt, Markierungen & Lesezeichen', () => openContents()),
     bmBtn,
   );
   const menuBottom = h('div', { class: 'r-menu-bottom' },
@@ -120,6 +125,8 @@ export async function openReader(root, bookId) {
     for (let i = 0; i < flow.length; i++) cum[i + 1] = cum[i] + flow[i].weight;
     totalChars = Math.max(1, cum[flow.length]);
     updateParaStyle();
+    toc = flow.map((f, fi) => ({ f, fi })).filter(({ f }) => f.block === 'h1' || f.block === 'h2')
+      .map(({ f, fi }) => ({ fi, title: f.text, level: f.block === 'h1' ? 0 : 1, pageIndex: f.pageIndex }));
     sections = [];
     let start = 0;
     for (let i = 1; i <= flow.length; i++) {
@@ -182,6 +189,7 @@ export async function openReader(root, bookId) {
       frag.append(el);
     }
     content.replaceChildren(frag);
+    applyHighlights();
     measure();
   }
 
@@ -200,11 +208,19 @@ export async function openReader(root, bookId) {
   }
 
   let colHeight = 400;
+  let cols = 1, step = 1, frameW = 0;
+  // Spaltengeometrie: im Querformat auf großen Bildschirmen zwei Spalten wie ein aufgeschlagenes Buch
   function layout() {
     const m = MARGINS[settings.margin] || 28;
     const W = viewport.clientWidth;
     const H = viewport.clientHeight;
-    colW = Math.max(200, Math.min(W - 2 * m, Math.round(settings.fontSize * 34)));
+    gap = 2 * m;
+    cols = settings.spread !== false && W > H && W >= 820 ? 2 : 1;
+    // Zeilen nicht zu lang werden lassen (Tablet/Desktop): max. ca. 34em
+    colW = Math.max(200, Math.min((W - 2 * m - gap * (cols - 1)) / cols, Math.round(settings.fontSize * 34)));
+    colW = Math.floor(colW);
+    frameW = cols * colW + (cols - 1) * gap;
+    step = cols * (colW + gap);
     const lh = Math.round(settings.fontSize * settings.lineHeight);
     const vpad = Math.max(12, Math.round(m * 0.5));
     colHeight = Math.max(lh * 3, Math.floor((H - 2 * vpad) / lh) * lh);
@@ -214,11 +230,10 @@ export async function openReader(root, bookId) {
     const m = MARGINS[settings.margin] || 28;
     const W = viewport.clientWidth;
     const H = viewport.clientHeight;
-    // Zeilen nicht zu lang werden lassen (Tablet/Desktop): max. ca. 34em
-    colW = Math.max(200, Math.min(W - 2 * m, Math.round(settings.fontSize * 34)));
-    gap = 2 * m;
-    frame.style.left = Math.round((W - colW) / 2) + 'px';
-    frame.style.width = colW + 'px';
+    layout();
+    frame.style.left = Math.round((W - frameW) / 2) + 'px';
+    frame.style.width = frameW + 'px';
+    view.classList.toggle('spread', cols === 2);
     const fs = settings.fontSize;
     const lh = Math.round(fs * settings.lineHeight);
     // Höhe auf ganze Zeilen runden, damit keine halben Zeilen abgeschnitten werden
@@ -235,14 +250,14 @@ export async function openReader(root, bookId) {
     const base = content.getBoundingClientRect().left;
     const rects = last.getClientRects();
     const r = rects[rects.length - 1] || last.getBoundingClientRect();
-    screens = Math.max(1, Math.ceil((r.right - base - 1) / (colW + gap)));
+    screens = Math.max(1, Math.ceil((r.right - base - 1) / step));
   }
 
   let locateTimer = null;
   function showScreen(n, animate = false) {
     screen = Math.max(0, Math.min(screens - 1, n));
     content.style.transition = animate ? 'transform 180ms ease-out' : 'none';
-    content.style.transform = `translateX(${-screen * (colW + gap)}px)`;
+    content.style.transform = `translateX(${-screen * step}px)`;
     // Während der Animation stimmen Bildschirmkoordinaten nicht → danach messen
     clearTimeout(locateTimer);
     if (animate) locateTimer = setTimeout(updatePositionFromScreen, 200);
@@ -252,8 +267,8 @@ export async function openReader(root, bookId) {
   // Erste sichtbare Textstelle auf dem aktuellen Bildschirm ermitteln
   function locate(screenNo) {
     const base = content.getBoundingClientRect().left;
-    const x0 = screenNo * (colW + gap);
-    const x1 = x0 + colW;
+    const x0 = screenNo * step;
+    const x1 = x0 + frameW;
     const els = content.children;
     for (const el of els) {
       const rects = el.getClientRects();
@@ -335,7 +350,7 @@ export async function openReader(root, bookId) {
     }
     if (!rect) rect = el.getClientRects()[0];
     if (!rect) return 0;
-    return Math.max(0, Math.floor((rect.left - base + 1) / (colW + gap)));
+    return Math.max(0, Math.floor((rect.left - base + 1) / step));
   }
 
   function goToFlow(fi, char = 0) {
@@ -381,6 +396,8 @@ export async function openReader(root, bookId) {
   // ---------- Navigation ----------
   function next() {
     userNav();
+    recordActivity();
+    import('./stats.js').then((m) => m.addTurn(profileId)).catch(() => {});
     if (settings.mode === 'images') {
       if (imgIndex < pages.length - 1) renderImage(imgIndex + 1); else endOfBook();
       return;
@@ -391,6 +408,7 @@ export async function openReader(root, bookId) {
   }
   function prev() {
     userNav();
+    recordActivity();
     if (settings.mode === 'images') { if (imgIndex > 0) renderImage(imgIndex - 1); return; }
     if (screen > 0) showScreen(screen - 1, true);
     else if (sectionIdx > 0) { renderSection(sectionIdx - 1); showScreen(screens - 1); }
@@ -426,13 +444,22 @@ export async function openReader(root, bookId) {
     const pi = pos.pageIndex ?? 0;
     const left = (1 - (pos.ratio || 0)) * totalChars / CHARS_PER_MIN;
     const leftTxt = left < 1 ? 'weniger als 1 Min.' : left < 60 ? `${Math.round(left)} Min.` : `${Math.floor(left / 60)} Std. ${Math.round(left % 60)} Min.`;
+    const fmtMin = (mins) => (mins < 1 ? 'weniger als 1 Min.' : mins < 60 ? `${Math.round(mins)} Min.` : `${Math.floor(mins / 60)} Std. ${Math.round(mins % 60)} Min.`);
+    let chapterTxt = '';
+    if (toc.length && settings.mode === 'text') {
+      const fiNow = flowIndexFor(pos);
+      const nextH = toc.find((t) => t.fi > fiNow);
+      const end = nextH ? cum[nextH.fi] : totalChars;
+      chapterTxt = `Noch ${fmtMin(Math.max(0, end - (cum[fiNow] + (pos.char || 0))) / CHARS_PER_MIN)} im Kapitel`;
+    }
     footLeft.textContent = settings.footer === 'time'
       ? `Noch ${leftTxt} im Buch`
-      : settings.footer === 'none' ? '' : `${pageLabel(pi)} von ${pageTotal()}`;
+      : settings.footer === 'chapter' && chapterTxt ? chapterTxt
+        : settings.footer === 'none' ? '' : `${pageLabel(pi)} von ${pageTotal()}`;
     sliderLabel.textContent = `${pageLabel(pi)} von ${pageTotal()} · ${pct} %`;
   }
   function cycleFooter() {
-    settings.footer = { page: 'time', time: 'none', none: 'page' }[settings.footer] || 'page';
+    settings.footer = { page: toc.length ? 'chapter' : 'time', chapter: 'time', time: 'none', none: 'page' }[settings.footer] || 'page';
     saveSettings(settings);
     updateFooter();
   }
@@ -482,14 +509,35 @@ export async function openReader(root, bookId) {
   }
 
   // ---------- Inhalt (Lesezeichen & Seiten) ----------
-  function openContents() {
+  function openContents(initial) {
     const list = h('div', { class: 'stack' });
     const tabs = h('div', { class: 'segmented' });
     const thumbPool = new UrlPool();
     const show = (which) => {
       tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.t === which));
       thumbPool.clear();
-      if (which === 'bm') {
+      if (which === 'toc') {
+        const cur = flowIndexFor(pos);
+        let curIdx = -1;
+        toc.forEach((t, i) => { if (t.fi <= cur) curIdx = i; });
+        list.replaceChildren(h('div', { class: 'toc' }, ...toc.map((t, i) => h('button', {
+          class: 'toc-item lv' + t.level + (i === curIdx ? ' current' : ''),
+          onClick: () => { s.close(); userNav(); closeMenu(); if (settings.mode !== 'text') switchModeTo('text', t.pageIndex); goToFlow(t.fi, 0); },
+        }, h('span', { class: 'grow' }, t.title), h('span', { class: 'muted small' }, pageLabel(t.pageIndex).replace('Seite ', 'S. '))))));
+      } else if (which === 'hl') {
+        const hls = liveHighlights().sort((a, b) => hlGlobal(a) - hlGlobal(b));
+        list.replaceChildren(
+          hls.length ? h('button', { class: 'btn small', onClick: () => exportHighlights() }, icon('download'), 'Markierungen exportieren (.md)') : null,
+          ...(hls.length ? hls.map((hl) => h('button', { class: 'menu-item multi hl-item', onClick: () => { s.close(); jumpToHighlight(hl); } },
+            h('span', { class: 'hl-dot c-' + hl.color }),
+            h('span', {},
+              h('span', { class: 'small muted' }, pageLabel(hlPageIndex(hl))), h('br'),
+              h('span', { class: 'hl-quote' }, hl.text.length > 220 ? hl.text.slice(0, 220) + '…' : hl.text),
+              hl.note ? [h('br'), h('span', { class: 'hl-note' }, icon('note'), hl.note)] : null,
+            ),
+          )) : [h('p', { class: 'muted' }, 'Noch keine Markierungen. Text lange antippen bzw. markieren und eine Farbe wählen.')]),
+        );
+      } else if (which === 'bm') {
         const bms = [...(state.bookmarks || [])].sort((a, b) => globalOf(a) - globalOf(b));
         list.replaceChildren(...(bms.length ? bms.map((b) => h('button', { class: 'menu-item multi', onClick: () => { s.close(); jumpTo(b); } },
           icon('bookmark'),
@@ -499,15 +547,18 @@ export async function openReader(root, bookId) {
         list.replaceChildren(h('div', { class: 'pages-grid compact' }, ...pages.map((p, i) => h('button', {
           class: 'page-tile' + (i === (pos?.pageIndex ?? -1) ? ' current' : ''),
           onClick: () => { s.close(); jumpToPage(i); },
-        }, h('img', { src: thumbPool.get(p.thumb), alt: '', loading: 'lazy' }), h('span', { class: 'page-no' }, i + 1)))));
+        }, p.thumb ? h('img', { src: thumbPool.get(p.thumb), alt: '', loading: 'lazy' }) : h('span', { class: 'page-textthumb' }, (p.text || '').slice(0, 160)),
+        h('span', { class: 'page-no' }, numbers.labels[i] || i + 1)))));
       }
     };
+    if (toc.length) tabs.append(h('button', { 'data-t': 'toc', onClick: () => show('toc') }, 'Inhalt'));
     tabs.append(
-      h('button', { 'data-t': 'bm', onClick: () => show('bm') }, 'Lesezeichen'),
+      h('button', { 'data-t': 'hl', onClick: () => show('hl') }, 'Markiert'),
+      h('button', { 'data-t': 'bm', onClick: () => show('bm') }, 'Lesez.'),
       h('button', { 'data-t': 'pages', onClick: () => show('pages') }, 'Seiten'),
     );
     const s = sheet('Inhalt', h('div', { class: 'stack' }, tabs, list), { onClose: () => thumbPool.clear() });
-    show((state.bookmarks || []).length ? 'bm' : 'pages');
+    show(initial || (toc.length ? 'toc' : liveHighlights().length ? 'hl' : (state.bookmarks || []).length ? 'bm' : 'pages'));
   }
 
   function jumpTo(b) {
@@ -657,6 +708,8 @@ export async function openReader(root, bookId) {
       h('strong', {}, 'Ränder'), seg('margin', { s: 'Schmal', m: 'Normal', l: 'Breit' }),
       h('strong', {}, 'Ausrichtung'), seg('align', { justify: 'Blocksatz', left: 'Linksbündig' }),
       h('strong', {}, 'Absätze'), seg('paraStyle', { auto: 'Automatisch', indent: 'Einzug', space: 'Abstand' }),
+      h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Zwei Spalten im Querformat'), h('br'), h('span', { class: 'muted small' }, 'Auf dem Tablet wie ein aufgeschlagenes Buch')),
+        h('input', { type: 'checkbox', checked: settings.spread !== false, onChange: (e) => { settings.spread = e.target.checked; saveSettings(settings); relayout(); } })),
     ));
   }
 
@@ -670,6 +723,278 @@ export async function openReader(root, bookId) {
     else { sectionIdx = -1; jumpToPage(pi); }
     toast(settings.mode === 'images' ? 'Originalfotos' : 'Textansicht');
   }
+
+  // ---------- Markierungen & Notizen ----------
+  // Markierung: { id, segs: [{ pageId, p, start, end }], text, color, note, createdAt, updatedAt, deleted? }
+  const HL_COLORS = { yellow: 'Gelb', green: 'Grün', blue: 'Blau', pink: 'Rosa' };
+  const liveHighlights = () => (state.highlights || []).filter((x) => !x.deleted);
+  const flowIndexExact = (seg) => {
+    let fi = flow.findIndex((f) => f.pageId === seg.pageId && f.p === seg.p);
+    return fi;
+  };
+  const hlGlobal = (hl) => { const sg = hl.segs[0]; const fi = flowIndexExact(sg); return fi < 0 ? Infinity : cum[fi] + sg.start; };
+  const hlPageIndex = (hl) => { const sg = hl.segs[0]; const fi = flowIndexExact(sg); return fi < 0 ? 0 : sourcePageAt(fi, sg.start); };
+
+  function charOffsetIn(el, node, offset) {
+    if (!el.contains(node)) return node.compareDocumentPosition && (el.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) ? textNodes(el).total : 0;
+    const r = document.createRange();
+    r.setStart(el, 0);
+    r.setEnd(node, offset);
+    return r.toString().length;
+  }
+
+  // Textbereich [start, end) eines Absatzes mit <mark> umschließen (über fett/kursiv hinweg)
+  function wrapRange(el, start, end, attrs) {
+    const tn = textNodes(el);
+    for (const { n, start: s0 } of tn.nodes) {
+      const a = Math.max(start, s0), b = Math.min(end, s0 + n.length);
+      if (a >= b) continue;
+      let node = n;
+      if (b < s0 + node.length) node.splitText(b - s0);
+      if (a > s0) node = node.splitText(a - s0);
+      const m = document.createElement('mark');
+      for (const [k, v] of Object.entries(attrs)) m.setAttribute(k, v);
+      node.parentNode.insertBefore(m, node);
+      m.append(node);
+    }
+  }
+
+  function applyHighlights() {
+    if (sectionIdx < 0 || !sections[sectionIdx]) return;
+    const [a, b] = sections[sectionIdx];
+    for (const hl of liveHighlights()) {
+      for (const sg of hl.segs) {
+        const fi = flowIndexExact(sg);
+        if (fi < a || fi >= b) continue;
+        const el = content.querySelector(`[data-fi="${fi}"]`);
+        if (!el || el.tagName === 'FIGURE') continue;
+        wrapRange(el, sg.start, sg.end, { class: 'hl c-' + hl.color + (hl.note ? ' has-note' : ''), 'data-hl': hl.id });
+      }
+    }
+  }
+
+  function rerenderKeepScreen() {
+    const keep = screen;
+    if (sectionIdx < 0) return;
+    renderSection(sectionIdx);
+    showScreen(Math.min(keep, screens - 1));
+  }
+
+  async function saveHighlights(list) {
+    state = await db.updateState(profileId, bookId, { highlights: list });
+    lastSavedAt = Date.now();
+  }
+
+  // Schwebende Leiste über der Textauswahl
+  const hlBar = h('div', { class: 'hl-bar', hidden: true },
+    ...Object.entries(HL_COLORS).map(([c, label]) => h('button', { class: 'hl-dot-btn c-' + c, 'aria-label': 'Markieren: ' + label, onClick: () => createHighlight(c) })),
+    h('button', { class: 'hl-bar-btn', onClick: () => createHighlight('yellow', true) }, icon('note'), 'Notiz'),
+    h('button', { class: 'hl-bar-btn', onClick: () => { navigator.clipboard && navigator.clipboard.writeText(String(window.getSelection())); toast('Kopiert'); hideHlBar(); } }, 'Kopieren'),
+  );
+  view.append(hlBar);
+  function hideHlBar() { hlBar.hidden = true; }
+  let selTimer = null;
+  const onSel = () => {
+    clearTimeout(selTimer);
+    selTimer = setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !content.contains(sel.anchorNode) || settings.mode !== 'text') { hideHlBar(); return; }
+      const r = sel.getRangeAt(0).getBoundingClientRect();
+      const vr = view.getBoundingClientRect();
+      hlBar.hidden = false;
+      const bw = hlBar.offsetWidth || 280;
+      hlBar.style.left = Math.max(8, Math.min(vr.width - bw - 8, r.left + r.width / 2 - bw / 2 - vr.left)) + 'px';
+      const above = r.top - vr.top - 56;
+      hlBar.style.top = (above > 40 ? above : r.bottom - vr.top + 12) + 'px';
+    }, 200);
+  };
+  document.addEventListener('selectionchange', onSel);
+
+  async function createHighlight(color, withNote = false) {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    const startEl = (range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer).closest('[data-fi]');
+    const endEl = (range.endContainer.nodeType === 3 ? range.endContainer.parentElement : range.endContainer).closest('[data-fi]');
+    if (!startEl || !endEl) return;
+    const fa = +startEl.dataset.fi, fb = +endEl.dataset.fi;
+    const segs = [];
+    for (let fi = fa; fi <= fb; fi++) {
+      const f = flow[fi];
+      const el = content.querySelector(`[data-fi="${fi}"]`);
+      if (!f || f.figure || f.placeholder || !el) continue;
+      const len = textNodes(el).total;
+      const st = fi === fa ? charOffsetIn(el, range.startContainer, range.startOffset) : 0;
+      const en = fi === fb ? charOffsetIn(el, range.endContainer, range.endOffset) : len;
+      if (en > st) segs.push({ pageId: f.pageId, p: f.p, start: st, end: en });
+    }
+    if (!segs.length) return;
+    const now = Date.now();
+    const hl = { id: db.uid(), segs, text: String(sel).trim(), color, note: '', createdAt: now, updatedAt: now };
+    sel.removeAllRanges();
+    hideHlBar();
+    await saveHighlights([...(state.highlights || []), hl]);
+    rerenderKeepScreen();
+    if (withNote) openHighlight(hl.id, true);
+    else toast('Markiert');
+  }
+
+  function openHighlight(id, focusNote = false) {
+    const hl = (state.highlights || []).find((x) => x.id === id);
+    if (!hl) return;
+    let color = hl.color;
+    const note = h('textarea', { class: 'input', rows: 3, placeholder: 'Notiz (optional)' });
+    note.value = hl.note || '';
+    const colorRow = h('div', { class: 'row gap-s' });
+    const paint = () => colorRow.replaceChildren(...Object.entries(HL_COLORS).map(([c, label]) => h('button', { type: 'button', class: 'hl-dot-btn c-' + c + (c === color ? ' on' : ''), 'aria-label': label, onClick: () => { color = c; paint(); } })));
+    paint();
+    const update = async (patch) => {
+      const list = (state.highlights || []).map((x) => (x.id === id ? { ...x, ...patch, updatedAt: Date.now() } : x));
+      await saveHighlights(list);
+      rerenderKeepScreen();
+    };
+    const sh = sheet('Markierung', h('div', { class: 'stack' },
+      h('blockquote', { class: 'hl-quote-big c-' + hl.color }, hl.text),
+      colorRow, note,
+      h('div', { class: 'row gap-s wrap' },
+        h('button', { class: 'btn primary', onClick: async () => { await update({ color, note: note.value.trim() }); sh.close(); } }, 'Speichern'),
+        h('button', { class: 'btn', onClick: () => { navigator.clipboard && navigator.clipboard.writeText(hl.text + (note.value ? '\n\nNotiz: ' + note.value : '')); toast('Kopiert'); } }, 'Kopieren'),
+        h('button', { class: 'btn danger', onClick: async () => { await update({ deleted: true }); sh.close(); toast('Markierung entfernt'); } }, icon('trash'), 'Entfernen'),
+      ),
+    ));
+    if (focusNote) setTimeout(() => note.focus(), 250);
+  }
+
+  function jumpToHighlight(hl) {
+    const sg = hl.segs[0];
+    const fi = flowIndexExact(sg);
+    if (fi < 0) { toast('Stelle nicht mehr vorhanden'); return; }
+    userNav(); closeMenu();
+    if (settings.mode !== 'text') { settings.mode = 'text'; saveSettings(settings); applySettings(); sectionIdx = -1; }
+    goToFlow(fi, sg.start);
+  }
+
+  function exportHighlights() {
+    const lines = [`# ${book.title}${book.author ? ' – ' + book.author : ''}`, '', `Markierungen und Notizen · exportiert am ${new Date().toLocaleDateString('de-DE')}`, ''];
+    for (const hl of liveHighlights().sort((a, b) => hlGlobal(a) - hlGlobal(b))) {
+      lines.push(`> ${hl.text.replace(/\n+/g, ' ')}`, '');
+      if (hl.note) lines.push(`**Notiz:** ${hl.note}`, '');
+      lines.push(`— ${pageLabel(hlPageIndex(hl))} · ${HL_COLORS[hl.color] || ''}`, '', '---', '');
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+    download(blob, safeName(book.title) + ' - Markierungen.md');
+  }
+
+  // ---------- Vorlesen (Sprachausgabe des Geräts) ----------
+  const tts = (() => {
+    const synth = window.speechSynthesis;
+    let active = false, cur = null; // cur = { fi, char }
+    let utter = null, chunkBase = 0, chunkFi = -1;
+    const bar = h('div', { class: 'tts-bar', hidden: true });
+    const rateBtn = h('button', { class: 'tts-rate', onClick: () => cycleRate() });
+    const playBtn = iconButton('pause', 'Pause', () => (active ? pause() : play()));
+    bar.append(icon('speaker'), h('span', { class: 'grow tts-label' }, 'Vorlesen'), rateBtn, playBtn, iconButton('stop', 'Vorlesen beenden', () => stop()));
+    view.append(bar);
+    const rateTxt = () => (settings.ttsRate || 1).toLocaleString('de-DE', { minimumFractionDigits: 1 }) + '×';
+    rateBtn.textContent = rateTxt();
+    function voice() {
+      // Stimmen auf dem Gerät bevorzugen (Online-Stimmen schicken den Text an den Anbieter)
+      const all = synth.getVoices().filter((v) => /^de(-|_|$)/i.test(v.lang));
+      const vs = all.filter((v) => v.localService !== false).length ? all.filter((v) => v.localService !== false) : all;
+      return vs.find((v) => /premium|enhanced|anna|petra|markus|helena/i.test(v.name)) || vs[0] || null;
+    }
+    function cycleRate() {
+      const rates = [0.8, 1, 1.2, 1.4, 1.7];
+      const i = rates.indexOf(settings.ttsRate || 1);
+      settings.ttsRate = rates[(i + 1) % rates.length];
+      saveSettings(settings);
+      rateBtn.textContent = rateTxt();
+      if (active) { synth.cancel(); speakFrom(cur); }
+    }
+    function markSpeaking(fi) {
+      content.querySelectorAll('.speaking').forEach((e) => e.classList.remove('speaking'));
+      const el = content.querySelector(`[data-fi="${fi}"]`);
+      if (el) el.classList.add('speaking');
+    }
+    function follow(fi, char) {
+      // Seite umblättern, sobald die gesprochene Stelle nicht mehr sichtbar ist
+      if (settings.mode !== 'text') return;
+      if (sectionOf(fi) !== sectionIdx) { goToFlow(fi, char); markSpeaking(fi); return; }
+      const sc = screenOfChar(fi, char);
+      if (sc !== screen) showScreen(sc, true);
+    }
+    function speakFrom(at) {
+      let { fi, char } = at;
+      while (fi < flow.length && (flow[fi].placeholder || (flow[fi].figure && !flow[fi].caption))) { fi++; char = 0; }
+      if (fi >= flow.length) { stop(); toast('Ende des Buchs'); return; }
+      const f = flow[fi];
+      const text = f.figure ? 'Abbildung: ' + f.caption : f.text;
+      // In Sätze bis ca. 280 Zeichen teilen (lange Äußerungen brechen auf manchen Geräten ab)
+      let end = Math.min(text.length, char + 280);
+      if (end < text.length) {
+        const sub = text.slice(char, end);
+        const m = sub.match(/^[\s\S]*[.!?…:;](?=\s)/);
+        if (m && m[0].length > 40) end = char + m[0].length;
+        else { const sp = sub.lastIndexOf(' '); if (sp > 40) end = char + sp; }
+      }
+      const piece = text.slice(char, end);
+      cur = { fi, char };
+      chunkFi = fi; chunkBase = char;
+      markSpeaking(fi);
+      follow(fi, char);
+      utter = new SpeechSynthesisUtterance(piece);
+      utter.lang = 'de-DE';
+      const v = voice(); if (v) utter.voice = v;
+      utter.rate = settings.ttsRate || 1;
+      utter.onboundary = (e) => {
+        if (e.name && e.name !== 'word') return;
+        cur = { fi: chunkFi, char: chunkBase + e.charIndex };
+        if (!f.figure) follow(chunkFi, cur.char);
+      };
+      utter.onend = () => {
+        if (!active || utter.__cancelled) return;
+        const next = end >= text.length ? { fi: fi + 1, char: 0 } : { fi, char: end + (text[end] === ' ' ? 1 : 0) };
+        speakFrom(next);
+      };
+      utter.onerror = (e) => { if (e.error !== 'interrupted' && e.error !== 'canceled') { console.warn('TTS', e.error); } };
+      synth.speak(utter);
+      recordActivity();
+    }
+    function play() {
+      if (!synth) { toast('Vorlesen wird von diesem Browser nicht unterstützt'); return; }
+      if (settings.mode !== 'text') { switchModeTo('text', pos?.pageIndex ?? 0); }
+      active = true;
+      bar.hidden = false;
+      playBtn.replaceChildren(icon('pause')); playBtn.setAttribute('aria-label', 'Pause');
+      speakFrom(cur || locate(screen));
+    }
+    function pause() {
+      active = false;
+      if (utter) utter.__cancelled = true;
+      synth.cancel();
+      playBtn.replaceChildren(icon('play')); playBtn.setAttribute('aria-label', 'Weiter vorlesen');
+    }
+    function stop() {
+      pause();
+      cur = null;
+      bar.hidden = true;
+      content.querySelectorAll('.speaking').forEach((e) => e.classList.remove('speaking'));
+    }
+    return {
+      toggle() { if (active) pause(); else { cur = null; play(); } },
+      stop,
+      isActive: () => active,
+    };
+  })();
+
+  // ---------- Lesestatistik (Lesezeit je Tag) ----------
+  let lastActivity = Date.now();
+  function recordActivity() { lastActivity = Date.now(); }
+  const statTick = setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    if (Date.now() - lastActivity > 120000 && !tts.isActive()) return; // länger nichts gemacht → nicht zählen
+    import('./stats.js').then((m) => m.addReading(profileId, bookId, 15)).catch(() => {});
+  }, 15000);
 
   // ---------- Abbildung vergrößert ansehen ----------
   function openFigure(id) {
@@ -732,6 +1057,14 @@ export async function openReader(root, bookId) {
     start = null;
     const showBtn = e.target.closest && e.target.closest('[data-show-page]');
     if (showBtn) { switchModeTo('images', +showBtn.dataset.showPage); return; }
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && content.contains(sel.anchorNode)) {
+      // Text ist markiert: Antippen hebt die Auswahl auf statt zu blättern
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 600 && !(e.target.closest && e.target.closest('.hl-bar'))) { sel.removeAllRanges(); hideHlBar(); }
+      return;
+    }
+    const markEl = e.target.closest && e.target.closest('mark.hl');
+    if (markEl && !menuOpen && Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 600) { openHighlight(markEl.dataset.hl); return; }
     const figEl = e.target.closest && e.target.closest('figure.fig');
     if (figEl && !menuOpen && Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 600) { openFigure(figEl.dataset.fig); return; }
     if (zoomed && settings.mode === 'images') { if (menuOpen) closeMenu(); else if (Math.abs(dx) < 8 && Math.abs(dy) < 8) openMenu(); return; }
@@ -845,6 +1178,20 @@ export async function openReader(root, bookId) {
   await loadFigures();
   rebuildFlow();
   restore();
+  // Sprung aus der Suche über alle Bücher
+  const jump = takeJump(bookId);
+  if (jump && settings.mode === 'text') {
+    let fi = flow.findIndex((f) => f.pageId === jump.pageId && f.p === jump.p);
+    let char = jump.char;
+    if (fi < 0) {
+      fi = flow.findIndex((f) => f.continues && f.continues.some((c) => c.pageId === jump.pageId));
+      if (fi >= 0) char += flow[fi].continues.find((c) => c.pageId === jump.pageId).offset;
+    }
+    if (fi >= 0) { userNav(); goToFlow(fi, char); }
+  } else if (jump) {
+    const pi = pages.findIndex((p) => p.id === jump.pageId);
+    if (pi >= 0) { userNav(); renderImage(pi); }
+  }
   try {
     if (!localStorage.getItem('ob.hint')) {
       localStorage.setItem('ob.hint', '1');
@@ -855,6 +1202,9 @@ export async function openReader(root, bookId) {
   return () => {
     clearTimeout(saveTimer);
     if (pos && userMoved) db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now() });
+    tts.stop();
+    clearInterval(statTick);
+    document.removeEventListener('selectionchange', onSel);
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('visibilitychange', onVis);
     window.removeEventListener('resize', onResize);

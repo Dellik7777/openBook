@@ -62,7 +62,9 @@ async function ensureWorkers() {
           gzip: true,
         });
         // Buchseiten: automatische Seitensegmentierung, Wortabstände erhalten
-        await worker.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '0' });
+        let psm = '3';
+        try { psm = localStorage.getItem('ob.psm') || psm; } catch (e) { /* */ }
+        await worker.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: '0' });
         workers.push({ worker, busy: false });
       }
     })().catch((e) => { workerInit = null; throw e; });
@@ -120,7 +122,7 @@ async function runOn(w) {
         // Ganze Seite ist eine Abbildung → kein Text
         await db.updatePage(pageId, { text: '', ocrStatus: 'done', paraY: [] });
       } else {
-        const { input, height, gray } = await prepareImage(page.image, figures);
+        const { input, height, width, gray } = await prepareImage(page.image, figures);
         const { data } = await w.worker.recognize(input, {}, { blocks: true, text: true });
         markStyles(data, gray);
         const res = analyzeOcr(data, { height });
@@ -131,6 +133,8 @@ async function runOn(w) {
           confidence: Math.round(data.confidence || 0),
         };
         if (!page.printedNoManual) patch.printedNo = res.printedNo;
+        patch.uncertain = uncertainWords(data, patch.text);
+        patch.lines = lineBoxes(data, width, height);
         await db.updatePage(pageId, patch);
       }
     }
@@ -160,7 +164,7 @@ export function isQueued(pageId) {
 // und markierte Abbildungen weiß übermalen, damit deren Beschriftungen nicht im Lesetext landen.
 async function prepareImage(blob, figures) {
   let bmp = null;
-  try { bmp = await createImageBitmap(blob); } catch (e) { return { input: blob, height: 0, gray: null }; }
+  try { bmp = await createImageBitmap(blob); } catch (e) { return { input: blob, height: 0, width: 0, gray: null }; }
   const { width, height } = bmp;
   const c = document.createElement('canvas');
   c.width = width; c.height = height;
@@ -175,7 +179,7 @@ async function prepareImage(blob, figures) {
   let gray = null;
   try { gray = grayImage(c, width, height); } catch (e) { console.warn('Stil-Erkennung nicht möglich', e); }
   const input = figures.length ? await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9)) : blob;
-  return { input, height, gray };
+  return { input, height, width, gray };
 }
 
 // Fett/kursiv je Wort bestimmen (setzt word.bold / word.italic im OCR-Ergebnis)
@@ -200,4 +204,41 @@ function markStyles(data, gray) {
   try { if (localStorage.getItem('ob.debug')) debug = []; } catch (e) { /* ignorieren */ }
   try { detectStyles(gray, words, 1, debug); } catch (e) { console.warn('Stil-Erkennung fehlgeschlagen', e); }
   if (debug) window.__obStyleDebug = debug;
+}
+
+// Wörter, bei denen die Erkennung unsicher war (zum gezielten Nachprüfen im Editor)
+function uncertainWords(data, text) {
+  const out = new Set();
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        for (const w of line.words || []) {
+          const t = (w.text || '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+          if (t.length < 3 || (w.confidence ?? 100) >= 62) continue;
+          if (!/\p{L}/u.test(t)) continue;
+          if (text && !text.includes(t)) continue; // z. B. Kopfzeile, die nicht im Text steht
+          out.add(t);
+          if (out.size >= 40) return [...out];
+        }
+      }
+    }
+  }
+  return [...out];
+}
+
+// Lage jeder Textzeile (relativ 0..1) – für die unsichtbare Textebene im durchsuchbaren PDF
+function lineBoxes(data, width, height) {
+  if (!width || !height) return null;
+  const out = [];
+  const r = (v) => Math.round(v * 10000) / 10000;
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        const t = (line.text || '').replace(/\s+/g, ' ').trim();
+        if (!t || !line.bbox) continue;
+        out.push({ t, x0: r(line.bbox.x0 / width), y0: r(line.bbox.y0 / height), x1: r(line.bbox.x1 / width), y1: r(line.bbox.y1 / height) });
+      }
+    }
+  }
+  return out;
 }

@@ -35,6 +35,7 @@ export async function exportBackup(bookIds = null, { photos = true } = {}) {
     });
   }
   zip.file('openbook.json', JSON.stringify(meta, null, 1));
+  if (!bookIds) db.setMeta('lastBackupAt', Date.now()); // für die Sicherungs-Erinnerung
   // Fotos sind schon JPEG → nicht noch einmal komprimieren
   return zip.generateAsync({ type: 'blob', compression: 'STORE' });
 }
@@ -93,6 +94,8 @@ export async function importBackupDetailed(file) {
       metaAt: now,
       orderAt: now,
       ignoredGaps: mb.ignoredGaps || [],
+      folderId: null,
+      tags: mb.tags || [],
     });
     for (const mf of mb.figures || []) {
       const image = await blobOf(zip, `books/${mb.id}/figures/${mf.id}.jpg`);

@@ -315,7 +315,8 @@ const FIGURE_WEIGHT = 600; // eine Abbildung zählt für den Fortschritt wie ~60
 // Kolumnentitel (wiederkehrende Kopf-/Fußzeilen wie Buch- oder Kapiteltitel) erkennen:
 // kurze Zeilen ohne Satzende, die auf mehreren Seiten als erster/letzter Absatz stehen.
 function runningHeaders(pages) {
-  const norm = (t) => t.toLowerCase().replace(/[^a-zäöüß]+/g, ' ').trim();
+  // Ziffern zählen mit: „Kapitel 1“ und „Kapitel 2“ sind verschiedene Überschriften, kein Kolumnentitel
+  const norm = (t) => t.toLowerCase().replace(/[^a-zäöüß0-9]+/g, ' ').trim();
   const count = new Map();
   for (const page of pages) {
     const paras = splitParas(page.text).map((m) => parseBlock(m).plain);
