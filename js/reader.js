@@ -550,7 +550,9 @@ export async function openReader(root, bookId) {
       } else if (which === 'hl') {
         const hls = liveHighlights().sort((a, b) => hlGlobal(a) - hlGlobal(b));
         list.replaceChildren(
-          hls.length ? h('button', { class: 'btn small', onClick: () => exportHighlights() }, icon('download'), 'Markierungen exportieren (.md)') : null,
+          hls.length ? h('div', { class: 'row gap-s wrap' },
+            h('a', { class: 'btn small primary', href: '#/lernen/' + bookId, onClick: () => s.close() }, icon('cards'), 'Lernkarten üben'),
+            h('button', { class: 'btn small', onClick: () => exportHighlights() }, icon('download'), 'Exportieren (.md)')) : null,
           ...(hls.length ? hls.map((hl) => h('button', { class: 'menu-item multi hl-item', onClick: () => { s.close(); jumpToHighlight(hl); } },
             h('span', { class: 'hl-dot c-' + hl.color }),
             h('span', {},
@@ -813,6 +815,12 @@ export async function openReader(root, bookId) {
     ...Object.entries(HL_COLORS).map(([c, label]) => h('button', { class: 'hl-dot-btn c-' + c, 'aria-label': 'Markieren: ' + label, onClick: () => createHighlight(c) })),
     h('button', { class: 'hl-bar-btn', onClick: () => createHighlight('yellow', true) }, icon('note'), 'Notiz'),
     h('button', { class: 'hl-bar-btn', onClick: () => { navigator.clipboard && navigator.clipboard.writeText(String(window.getSelection())); toast('Kopiert'); hideHlBar(); } }, 'Kopieren'),
+    h('button', { class: 'hl-bar-btn', 'aria-label': 'Nachschlagen', onClick: async () => {
+      const term = String(window.getSelection()).trim();
+      hideHlBar();
+      const { openLookup } = await import('./lookup.js');
+      openLookup(term.split(/\s+/).length > 4 ? term.split(/\s+/).slice(0, 4).join(' ') : term);
+    } }, icon('globe'), 'Nachschlagen'),
   );
   view.append(hlBar);
   function hideHlBar() { hlBar.hidden = true; }
@@ -916,7 +924,46 @@ export async function openReader(root, bookId) {
     const bar = h('div', { class: 'tts-bar', hidden: true });
     const rateBtn = h('button', { class: 'tts-rate', onClick: () => cycleRate() });
     const playBtn = iconButton('pause', 'Pause', () => (active ? pause() : play()));
-    bar.append(icon('speaker'), h('span', { class: 'grow tts-label' }, 'Vorlesen'), rateBtn, playBtn, iconButton('stop', 'Vorlesen beenden', () => stop()));
+    // Schlaf-Timer: nach X Minuten oder am Kapitelende aufhören
+    let sleep = null; // { until } | { chapter: true, fromFi }
+    let sleepTimer = null, sleepTick = null;
+    const sleepBtn = h('button', { class: 'tts-sleep', 'aria-label': 'Schlaf-Timer', onClick: () => openSleep() }, icon('moon'), h('span', {}, ''));
+    const sleepLabel = () => {
+      const lbl = sleepBtn.lastChild;
+      if (!sleep) { lbl.textContent = ''; sleepBtn.classList.remove('on'); sleepBtn.setAttribute('aria-label', 'Schlaf-Timer'); return; }
+      sleepBtn.classList.add('on');
+      lbl.textContent = sleep.chapter ? 'Kap.' : Math.max(1, Math.ceil((sleep.until - Date.now()) / 60000)) + "'";
+      sleepBtn.setAttribute('aria-label', sleep.chapter ? 'Schlaf-Timer: bis Kapitelende' : `Schlaf-Timer: noch ${lbl.textContent.replace("'", '')} Minuten`);
+    };
+    function setSleep(v) {
+      clearTimeout(sleepTimer); clearInterval(sleepTick);
+      sleep = v;
+      if (v && v.until) {
+        sleepTimer = setTimeout(() => sleepNow(), v.until - Date.now());
+        sleepTick = setInterval(sleepLabel, 20000);
+      }
+      sleepLabel();
+    }
+    function sleepNow() {
+      setSleep(null);
+      stop();
+      toast('Schlaf-Timer: Vorlesen beendet', 4000);
+    }
+    function openSleep() {
+      const opts = [[0, 'Aus'], [5, '5 Min.'], [15, '15 Min.'], [30, '30 Min.'], [45, '45 Min.'], [60, '60 Min.'], ['chapter', 'Ende des Kapitels']];
+      const sh = sheet('Schlaf-Timer', h('div', { class: 'menu' }, ...opts.map(([v, label]) => h('button', {
+        class: 'menu-item' + ((!sleep && v === 0) || (sleep && sleep.chapter && v === 'chapter') ? ' current' : ''),
+        onClick: () => {
+          sh.close();
+          if (!v) { setSleep(null); toast('Schlaf-Timer aus'); return; }
+          if (v === 'chapter') setSleep({ chapter: true, fromFi: cur ? cur.fi : locate(screen).fi });
+          else setSleep({ until: Date.now() + v * 60000 });
+          toast(v === 'chapter' ? 'Vorlesen endet am Kapitelende' : `Vorlesen endet in ${v} Minuten`);
+          if (!active) play();
+        },
+      }, icon(v ? 'moon' : 'close'), label))));
+    }
+    bar.append(icon('speaker'), h('span', { class: 'grow tts-label' }, 'Vorlesen'), sleepBtn, rateBtn, playBtn, iconButton('stop', 'Vorlesen beenden', () => stop()));
     view.append(bar);
     const rateTxt = () => (settings.ttsRate || 1).toLocaleString('de-DE', { minimumFractionDigits: 1 }) + '×';
     rateBtn.textContent = rateTxt();
@@ -950,6 +997,8 @@ export async function openReader(root, bookId) {
       let { fi, char } = at;
       while (fi < flow.length && (flow[fi].placeholder || (flow[fi].figure && !flow[fi].caption))) { fi++; char = 0; }
       if (fi >= flow.length) { stop(); toast('Ende des Buchs'); return; }
+      // Schlaf-Timer „Kapitelende“: nächste Kapitelüberschrift erreicht
+      if (sleep && sleep.chapter && fi > sleep.fromFi && (flow[fi].block === 'h1' || (flow[fi].block === 'h2' && !toc.some((t) => t.level === 0)))) { sleepNow(); return; }
       const f = flow[fi];
       const text = f.figure ? 'Abbildung: ' + f.caption : f.text;
       // In Sätze bis ca. 280 Zeichen teilen (lange Äußerungen brechen auf manchen Geräten ab)
@@ -1001,6 +1050,7 @@ export async function openReader(root, bookId) {
       pause();
       cur = null;
       bar.hidden = true;
+      if (sleep) setSleep(null);
       content.querySelectorAll('.speaking').forEach((e) => e.classList.remove('speaking'));
     }
     return {
@@ -1053,19 +1103,20 @@ export async function openReader(root, bookId) {
     const item = flow.find((f) => f.figure && f.figure.id === id);
     const caption = (item && item.caption) || fig.caption || '';
     const url = URL.createObjectURL(fig.image);
-    let zoom = false;
     const img = h('img', { src: url, alt: caption || 'Abbildung', draggable: 'false' });
     const stage = h('div', { class: 'fv-stage' }, img);
-    const close = () => { ov.remove(); URL.revokeObjectURL(url); document.removeEventListener('keydown', onEsc, true); };
+    let zm = null;
+    const close = () => { ov.remove(); URL.revokeObjectURL(url); document.removeEventListener('keydown', onEsc, true); zm && zm.destroy(); };
     const onEsc = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } };
-    const zoomBtn = iconButton('zoom', 'Vergrößern', () => { zoom = !zoom; stage.classList.toggle('zoomed', zoom); });
+    const zoomBtn = iconButton('zoom', 'Vergrößern', () => zm && zm.toggle());
     const ov = h('div', { class: 'figviewer', role: 'dialog', 'aria-label': 'Abbildung' },
       h('div', { class: 'fv-bar' }, iconButton('close', 'Schließen', close), h('div', { class: 'grow fv-cap' }, caption), zoomBtn),
       stage,
+      h('p', { class: 'fv-hint' }, 'Mit zwei Fingern zoomen, doppelt tippen zum Vergrößern'),
     );
-    stage.addEventListener('dblclick', () => { zoom = !zoom; stage.classList.toggle('zoomed', zoom); });
     document.addEventListener('keydown', onEsc, true);
     document.body.append(ov);
+    import('./zoom.js').then(({ zoomable }) => { zm = zoomable(stage, img); });
   }
 
   // ---------- Menü ----------

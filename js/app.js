@@ -42,6 +42,7 @@ const routes = [
   [/^#\/receive$/, () => openReceive(app)],
   [/^#\/rechtliches$/, () => openLegal(app)],
   [/^#\/statistik$/, () => openStats(app)],
+  [/^#\/lernen(?:\/([\w]+))?$/, async (m) => (await import('./cardsview.js')).openCards(app, m[1] || null)],
   [/^#\/page\/([\w]+)\/([\w]+)$/, (m) => openPageEditor(app, m[1], m[2])],
 ];
 
@@ -775,6 +776,7 @@ async function renderBook(bookId) {
           h('button', { class: 'btn primary block', onClick: async () => { await db.updateBook(bookId, { folderId: sel.value || null }); m.close(); toast('Verschoben'); } }, icon('folder'), 'Verschieben'),
           h('button', { class: 'btn block', onClick: () => { m.close(); folderDialog(null, null); } }, icon('folderPlus'), 'Neuen Ordner anlegen')));
       } }, icon('folder'), 'In Ordner verschieben'),
+      h('button', { class: 'menu-item', onClick: () => { s.close(); go('#/lernen/' + bookId); } }, icon('cards'), 'Lernkarten aus Markierungen üben'),
       h('button', { class: 'menu-item', onClick: () => { s.close(); sortByNumbers(); } }, icon('sort'), 'Seiten nach Seitenzahl ordnen'),
       h('button', { class: 'menu-item', onClick: () => { s.close(); storageDialog(); } }, icon('storage'), 'Speicher sparen'),
       h('button', { class: 'menu-item', onClick: async () => {
@@ -938,7 +940,8 @@ async function openSettings() {
     onChange: (e) => localStorage.setItem('ob.autoCrop', e.target.checked ? '1' : '0') });
   const s = sheet('Einstellungen', h('div', { class: 'stack' },
     syncEl,
-    h('a', { class: 'card card-link', href: '#/statistik', onClick: () => s.close() }, h('strong', {}, icon('stats'), ' Lesestatistik'), h('span', { class: 'muted small' }, 'Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher')),
+    h('a', { class: 'card card-link', href: '#/statistik', onClick: () => s.close() }, h('strong', {}, icon('stats'), ' Lesestatistik & Tagesziel'), h('span', { class: 'muted small' }, 'Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher')),
+    h('a', { class: 'card card-link', href: '#/lernen', onClick: () => s.close() }, h('strong', {}, icon('cards'), ' Lernkarten'), h('span', { class: 'muted small' }, 'Aus deinen Markierungen in allen Büchern – mit Wiederholung nach dem Karteikasten-Prinzip')),
     lockEl,
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Seiten gerade rücken'), h('br'), h('span', { class: 'muted small' }, 'Seite im Foto finden, Tisch abschneiden, schräge Aufnahmen und Wölbung zur Buchmitte ausgleichen.')), autoCropBox),
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Scan-Filter'), h('br'), h('span', { class: 'muted small' }, 'Fotos in Graustufen mit hellem Papier speichern. Bessere Erkennung, weniger Speicher.')), scanFilter),

@@ -440,10 +440,10 @@ input[type=range] { accent-color: var(--accent); }
 .fv-bar { display: flex; align-items: center; gap: 8px; padding: calc(var(--safe-top) + 6px) 8px 6px; }
 .fv-bar .icon-btn { color: #fff; }
 .fv-cap { font-size: 14px; opacity: .85; }
-.fv-stage { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; touch-action: pan-x pan-y pinch-zoom; }
-.fv-stage img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.fv-stage.zoomed { display: block; }
-.fv-stage.zoomed img { max-width: none; max-height: none; width: 250%; }
+.fv-stage { flex: 1; position: relative; overflow: hidden; touch-action: none; cursor: zoom-in; }
+.fv-stage.zoomed { cursor: grab; }
+.fv-stage img { position: absolute; max-width: 100%; max-height: 100%; user-select: none; -webkit-user-drag: none; }
+.fv-hint { margin: 0; padding: 6px 12px calc(10px + env(safe-area-inset-bottom)); text-align: center; font-size: 12px; opacity: .6; }
 
 /* ---------- Leser: Struktur (Überschriften, Aufzählungen, Absatzabstand) ---------- */
 .r-content p.h1, .r-content p.h2 {
@@ -705,3 +705,32 @@ html.locked #app { visibility: hidden; }
 .r-content .fnref::after { content: ''; position: absolute; inset: -8px -6px; }
 .reader[data-theme="dark"] .r-content .fnref, .reader[data-theme="black"] .r-content .fnref { color: #F28C28; }
 .fn-pop { font-family: var(--font-read, Georgia, serif); line-height: 1.5; margin: 0; }
+
+/* Vorlesen: Schlaf-Timer */
+.tts-sleep { display: inline-flex; align-items: center; gap: 3px; border: 0; background: transparent; color: inherit; font: 600 12px var(--font-ui); padding: 6px; border-radius: var(--radius); cursor: pointer; }
+.tts-sleep .icon { width: 18px; height: 18px; }
+.tts-sleep.on { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.menu-item.current { font-weight: 700; }
+
+/* Nachschlagen */
+.lookup-term { font-size: 18px; margin: 0; }
+.lookup-title { margin: 0 0 4px; font-size: 16px; }
+.lookup-extract { margin: 0; line-height: 1.5; font-family: Georgia, serif; }
+
+/* Lernkarten */
+.cards-page .progress.big { margin: 4px 0 18px; }
+.card-stage { display: flex; flex-direction: column; gap: 16px; max-width: 640px; margin: 0 auto; width: 100%; }
+.flashcard { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 18px 18px 20px; min-height: 220px; display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow); }
+.flashcard .cq { font-family: "Literata", Georgia, serif; font-size: 19px; line-height: 1.55; margin: 0; }
+.flashcard .gap { display: inline-block; min-width: 4em; border-bottom: 2px solid var(--brand); margin: 0 2px; }
+.flashcard .gap-word { background: color-mix(in srgb, var(--accent) 24%, transparent); color: inherit; padding: 0 2px; border-radius: 2px; font-weight: 700; }
+.flashcard .ca { margin: 0; padding: 10px 14px; border-left: 3px solid var(--line); font-family: "Literata", Georgia, serif; font-size: 17px; line-height: 1.5; }
+.card-back { display: flex; flex-direction: column; gap: 10px; border-top: 1px dashed var(--line); padding-top: 12px; }
+.card-back[hidden] { display: none; }
+.card-note { margin: 0; font-size: 14px; color: var(--muted); }
+.card-src { margin: 0; display: flex; align-items: center; gap: 4px; }
+.card-src .icon { width: 14px; height: 14px; }
+.card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.card-actions .block { grid-column: 1 / -1; }
+.big-btn { min-height: 52px; font-size: 16px; justify-content: center; }
+.card-more { justify-content: space-between; }
