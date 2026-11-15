@@ -3,7 +3,8 @@
 // sodass nach einem Neustart der App automatisch weitergemacht wird.
 
 import * as db from './db.js';
-import { paragraphsFromOcr } from './textproc.js';
+import { analyzeOcr } from './textproc.js';
+import { grayImage, detectStyles } from './fontstyle.js';
 
 const base = new URL('../vendor/tesseract/', import.meta.url).href;
 const LANGS = 'deu+eng';
@@ -112,15 +113,26 @@ async function runOn(w) {
   notify();
   try {
     const page = await db.getPage(pageId);
-    if (page) {
+    if (page && page.image) {
       await db.updatePage(pageId, { ocrStatus: 'running' });
-      const { data } = await w.worker.recognize(page.image, {}, { blocks: true, text: true });
-      const paras = paragraphsFromOcr(data);
-      await db.updatePage(pageId, {
-        text: paras.join('\n\n'),
-        ocrStatus: 'done',
-        confidence: Math.round(data.confidence || 0),
-      });
+      const figures = await db.getFiguresOfPage(pageId);
+      if (figures.some((f) => f.fullPage)) {
+        // Ganze Seite ist eine Abbildung → kein Text
+        await db.updatePage(pageId, { text: '', ocrStatus: 'done', paraY: [] });
+      } else {
+        const { input, height, gray } = await prepareImage(page.image, figures);
+        const { data } = await w.worker.recognize(input, {}, { blocks: true, text: true });
+        markStyles(data, gray);
+        const res = analyzeOcr(data, { height });
+        const patch = {
+          text: res.paras.join('\n\n'),
+          paraY: res.paraY,
+          ocrStatus: 'done',
+          confidence: Math.round(data.confidence || 0),
+        };
+        if (!page.printedNoManual) patch.printedNo = res.printedNo;
+        await db.updatePage(pageId, patch);
+      }
     }
   } catch (e) {
     console.error('OCR-Fehler', e);
@@ -142,4 +154,50 @@ export async function resume() {
 
 export function isQueued(pageId) {
   return queue.includes(pageId) || active.has(pageId);
+}
+
+// Bildgröße ermitteln, Graustufenbild für die Fett/Kursiv-Erkennung erzeugen
+// und markierte Abbildungen weiß übermalen, damit deren Beschriftungen nicht im Lesetext landen.
+async function prepareImage(blob, figures) {
+  let bmp = null;
+  try { bmp = await createImageBitmap(blob); } catch (e) { return { input: blob, height: 0, gray: null }; }
+  const { width, height } = bmp;
+  const c = document.createElement('canvas');
+  c.width = width; c.height = height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(bmp, 0, 0);
+  bmp.close && bmp.close();
+  ctx.fillStyle = '#fff';
+  for (const f of figures) {
+    const r = f.rect;
+    ctx.fillRect(r.x * width, r.y * height, r.w * width, r.h * height);
+  }
+  let gray = null;
+  try { gray = grayImage(c, width, height); } catch (e) { console.warn('Stil-Erkennung nicht möglich', e); }
+  const input = figures.length ? await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9)) : blob;
+  return { input, height, gray };
+}
+
+// Fett/kursiv je Wort bestimmen (setzt word.bold / word.italic im OCR-Ergebnis)
+function markStyles(data, gray) {
+  if (!gray) return;
+  const words = [];
+  let lineId = 0;
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        lineId++;
+        const lineH = line.bbox ? line.bbox.y1 - line.bbox.y0 : 0;
+        for (const wd of line.words || []) {
+          if (!wd.bbox || !wd.text) continue;
+          wd.lineH = lineH; wd.lineId = lineId;
+          words.push(wd);
+        }
+      }
+    }
+  }
+  let debug = null;
+  try { if (localStorage.getItem('ob.debug')) debug = []; } catch (e) { /* ignorieren */ }
+  try { detectStyles(gray, words, 1, debug); } catch (e) { console.warn('Stil-Erkennung fehlgeschlagen', e); }
+  if (debug) window.__obStyleDebug = debug;
 }

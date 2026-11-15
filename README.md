@@ -2,7 +2,7 @@
 
 **Deine eigenen Bücher abfotografieren und überall lesen, wie auf einem Kindle.**
 
-openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines Buchs, das dir gehört. Die App erkennt den Text direkt auf dem Gerät und macht daraus ein E-Book mit anpassbarer Schrift, Nachtmodus, Lesezeichen und Suche. Alles bleibt lokal auf deinem Gerät: keine Cloud, kein Konto, kein Upload.
+openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines Buchs, das dir gehört. Die App erkennt den Text direkt auf dem Gerät und macht daraus ein E-Book mit anpassbarer Schrift, Nachtmodus, Lesezeichen und Suche. Fotos und Texterkennung bleiben auf deinem Gerät. Optional werden Texte und Lesestände über **deinen eigenen** Google Drive oder OneDrive zwischen iPhone, iPad und Android abgeglichen.
 
 ## Funktionen
 
@@ -11,24 +11,36 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines B
 - **Doppelseiten-Modus**: ein Foto vom aufgeschlagenen Buch wird automatisch in linke und rechte Seite geteilt
 - Scan-Filter (Graustufen, helles Papier), Taschenlampe, „Zurück“ für die letzte Aufnahme
 - Import vorhandener Fotos aus der Galerie
+- **Seitenprüfung:** openBook liest die gedruckten Seitenzahlen mit und meldet sofort, wenn eine Seite fehlt, doppelt ist oder in falscher Reihenfolge liegt. Mit „Nachscannen“ wird die fehlende Seite an der richtigen Stelle eingefügt, mit „Passt so“ wird der Hinweis ausgeblendet
+- **Abbildungs-Modus:** Karten, Bilder und Diagramme in Farbe als ganze Seite fotografieren
 
 **Texterkennung (OCR)**
 - Tesseract läuft komplett im Browser (Deutsch + Englisch), auch offline
 - Läuft im Hintergrund weiter, während du scannst; wird nach einem Neustart fortgesetzt
-- Repariert Silbentrennung am Zeilenende, entfernt Seitenzahlen und verbindet Absätze über Seitengrenzen
+- Repariert Silbentrennung am Zeilenende, entfernt Seitenzahlen und Kolumnentitel und verbindet Absätze über Seitengrenzen
+- **Erhält die Formatierung:** Überschriften, Aufzählungen mit Ebenen, nummerierte Listen, **fett** und *kursiv* (eigene Bildanalyse von Strichstärke und Schräglage)
+- **Schatten-Entfernung:** Schatten von Hand oder Handy, Falten und ungleichmäßiges Licht werden vor der Erkennung herausgerechnet
 
 **Lesen wie auf einem Kindle**
 - Echter Seitenumbruch statt Scrollen: rechts tippen = weiter, links = zurück, Mitte = Menü, Wischen geht auch
 - Schriftgröße, Schriftart (Literata, Georgia, Sans, Weit), Zeilenabstand, Ränder, Blocksatz mit Silbentrennung
+- Absätze mit Einzug (Roman) oder Abstand (Fachtext), automatisch passend zum Inhalt
 - Hintergründe: Weiß, Papier, Sepia, Dunkel, Schwarz
 - Fußzeile mit Buchseite und Prozent oder verbleibender Lesezeit (antippen zum Umschalten)
 - Lesezeichen, Volltextsuche, Seitenübersicht, Schieberegler
-- Originalfoto-Ansicht mit Zoom, z. B. für Bilder, Tabellen oder Formeln
+- **Abbildungen im Text:** markierte Bilder, Karten und Diagramme stehen an der richtigen Stelle im Lesefluss, mit Bildunterschrift; antippen zum Vergrößern
+- Fußzeile mit den echten Seitenzahlen des gedruckten Buchs
+- Originalfoto-Ansicht mit Zoom, z. B. für Tabellen oder Formeln
 - Leseposition wird gespeichert, der Bildschirm bleibt beim Lesen an
+
+**Leseprofile & Synchronisierung**
+- Mehrere **Leseprofile** (z. B. für die Familie): jedes mit eigener Leseposition, eigenen Lesezeichen und Schrifteinstellungen
+- **Sync über Google Drive oder OneDrive**: Texte, Profile, Lesepositionen, Lesezeichen und Cover auf allen Geräten, ohne eigenen Server (Fotos bleiben lokal). Einrichtung: siehe **[SYNC.md](SYNC.md)**
+- Auf einem anderen Gerät weitergelesen? openBook springt an die neueste Stelle
 
 **Verwalten**
 - Bibliothek mit Covern (Foto oder automatisch erzeugt) und Lesefortschritt
-- Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen
+- Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen, Seitenzahl korrigieren, **Abbildungen markieren** (Beschriftungen in der Abbildung landen dann nicht im Lesetext)
 - **EPUB-Export**, z. B. für „Send to Kindle“, Apple Books oder Tolino
 - Sicherung und Wiederherstellung der ganzen Bibliothek als ZIP (mit Fotos)
 
@@ -63,7 +75,7 @@ Es gibt keinen Build-Schritt und keine Abhängigkeiten. Alles liegt im Repositor
 
 ## Daten & Speicher
 
-Bücher liegen in der IndexedDB des Browsers. Eine Seite braucht etwa 200 bis 400 KB, ein Buch mit 300 Seiten also ungefähr 60 bis 120 MB. openBook fragt nach dauerhaftem Speicher. Trotzdem gilt: **regelmäßig eine Sicherung erstellen** (Einstellungen → Alles sichern), besonders vor einem Handywechsel.
+Bücher liegen in der IndexedDB des Browsers. Mit Synchronisierung liegt zusätzlich der Text (ca. 0,5 MB pro Buch) in deinem Cloud-Speicher. Eine Seite braucht etwa 200 bis 400 KB, ein Buch mit 300 Seiten also ungefähr 60 bis 120 MB. openBook fragt nach dauerhaftem Speicher. Trotzdem gilt: **regelmäßig eine Sicherung erstellen** (Einstellungen → Alles sichern), besonders vor einem Handywechsel.
 
 > openBook ist für die private Nutzung **eigener** Bücher gedacht (Privatkopie). Bitte keine gescannten Bücher weitergeben.
 
@@ -72,12 +84,20 @@ Bücher liegen in der IndexedDB des Browsers. Eine Seite braucht etwa 200 bis 40
 ```
 index.html            App-Shell
 css/app.css           Design (Bibliothek, Scanner, Leser)
-js/app.js             Router, Bibliothek, Buchdetails, Einstellungen
+js/app.js             Router, Bibliothek, Buchdetails, Profile, Einstellungen
+js/profiles.js        Leseprofile (aktives Profil, Leseeinstellungen)
+js/config.js          Client-IDs für Google Drive / OneDrive
+js/sync/sync.js       Abgleich (Zusammenführen, Löschmarkierungen, Zeitplan)
+js/sync/google.js     Google Drive (appDataFolder, OAuth-Weiterleitung)
+js/sync/onedrive.js   OneDrive (App-Ordner, OAuth mit PKCE)
 js/scanner.js         Kamera-Scanner
 js/reader.js          Kindle-artiger Leser (CSS-Spalten-Paginierung)
 js/pageeditor.js      Seiten bearbeiten
 js/ocr.js             OCR-Warteschlange (Tesseract.js, Web Worker)
-js/textproc.js        OCR → Absätze, Silbentrennung, Seitenübergänge
+js/textproc.js        OCR → Absätze, Seitenzahlen, Kolumnentitel, Abbildungen im Lesefluss
+js/pagecheck.js       Seitenprüfung (fehlende/doppelte/vertauschte Seiten)
+js/fontstyle.js       Fett/kursiv aus den Bildpunkten erkennen
+js/rich.js            Formatierung (Überschriften, Listen, fett/kursiv) als einfache Auszeichnung
 js/imageproc.js       Skalieren, Scan-Filter, Teilen, Drehen, Zuschneiden
 js/db.js              IndexedDB
 js/epub.js            EPUB-3-Export

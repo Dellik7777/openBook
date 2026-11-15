@@ -3,9 +3,11 @@
 import * as db from './db.js';
 import * as ocr from './ocr.js';
 import { h, icon, iconButton, toast, pickFiles, UrlPool } from './ui.js';
-import { processCapture, grabFrame } from './imageproc.js';
+import { processCapture, grabFrame, cropFigure } from './imageproc.js';
+import { checkPages, describe } from './pagecheck.js';
 
-export async function openScanner(root, bookId) {
+// afterPageId: Nachscan-Modus – neue Seiten werden hinter dieser Seite eingefügt
+export async function openScanner(root, bookId, afterPageId = null, insertCount = 0) {
   const book = await db.getBook(bookId);
   if (!book) { location.hash = '#/'; return; }
   document.body.classList.add('dark-ui');
@@ -21,12 +23,17 @@ export async function openScanner(root, bookId) {
   const capturedCount = () => captures.reduce((n, c) => n + c.length, 0);
   let processing = Promise.resolve();
   let pendingCount = 0;
+  let figureMode = false;
+  let insertAfter = afterPageId && book.pageOrder.includes(afterPageId) ? afterPageId : null;
+  let insertLeft = insertAfter ? (insertCount || 1) : 0;
 
   const video = h('video', { playsinline: true, muted: true, autoplay: true, class: 'scan-video' });
   const guide = h('div', { class: 'scan-guide' + (split ? ' split' : '') });
   const flashEl = h('div', { class: 'scan-flash' });
   const counter = h('div', { class: 'scan-counter' });
   const lastThumb = h('button', { class: 'scan-thumb', 'aria-label': 'Fertig, zum Buch', onClick: () => finish() });
+  const thumbLabel = h('span', { class: 'scan-thumb-label' }, 'Fertig');
+  let lastId = null;
   const message = h('div', { class: 'scan-message', hidden: true });
 
   const splitBtn = h('button', { class: 'chip' + (split ? ' on' : ''), onClick: () => {
@@ -36,6 +43,18 @@ export async function openScanner(root, bookId) {
     guide.classList.toggle('split', split);
     toast(split ? 'Doppelseite: jedes Foto wird in 2 Seiten geteilt' : 'Einzelseite');
   } }, icon('split'), 'Doppelseite');
+
+  const figBtn = h('button', { class: 'chip', onClick: () => setFigureMode(!figureMode) }, icon('figure'), 'Abbildung');
+  function setFigureMode(on) {
+    figureMode = on;
+    figBtn.classList.toggle('on', on);
+    guide.classList.toggle('figure', on);
+    if (on) toast('Nächstes Foto wird in Farbe als Abbildung gespeichert (Karte, Bild, Diagramm)');
+  }
+
+  // Hinweise zu fehlenden/doppelten Seiten und Nachscan-Modus
+  const notice = h('div', { class: 'scan-notice', hidden: true });
+  const insertBar = h('div', { class: 'scan-insert', hidden: true });
 
   const torchBtn = h('button', { class: 'chip', hidden: true, onClick: async () => {
     torchOn = !torchOn;
@@ -50,8 +69,10 @@ export async function openScanner(root, bookId) {
     h('header', { class: 'scan-top' },
       iconButton('close', 'Scanner schließen', () => finish()),
       h('div', { class: 'scan-title' }, h('div', {}, book.title), counter),
-      h('div', { class: 'row gap-s' }, torchBtn, splitBtn),
+      h('div', { class: 'row gap-s wrap end scan-chips' }, torchBtn, figBtn, splitBtn),
     ),
+    insertBar,
+    notice,
     h('footer', { class: 'scan-bottom' },
       h('button', { class: 'scan-side', onClick: () => undo(), 'aria-label': 'Letzte Aufnahme löschen' }, icon('undo'), h('span', {}, 'Zurück')),
       shutter,
@@ -63,6 +84,28 @@ export async function openScanner(root, bookId) {
   );
   root.append(view);
   updateCounter();
+  updateInsertBar();
+
+  async function labelOf(pageId) {
+    const order = (await db.getBook(bookId)).pageOrder;
+    const p = await db.getPage(pageId);
+    return p && p.printedNo ? `S. ${p.printedNo}` : `Foto ${order.indexOf(pageId) + 1}`;
+  }
+
+  async function updateInsertBar() {
+    if (!insertAfter) { insertBar.hidden = true; return; }
+    insertBar.hidden = false;
+    insertBar.replaceChildren(
+      h('span', {}, `Nachscannen: ${insertLeft > 1 ? insertLeft + ' Seiten' : 'Seite'} wird nach ${await labelOf(insertAfter)} eingefügt`),
+      h('button', { class: 'chip', onClick: () => endInsert(true) }, 'Fertig'),
+    );
+  }
+  function endInsert(manual = false) {
+    insertAfter = null;
+    insertLeft = 0;
+    insertBar.hidden = true;
+    if (!manual) toast('Lücke gefüllt – neue Fotos kommen wieder ans Ende');
+  }
 
   async function start() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -123,18 +166,42 @@ export async function openScanner(root, bookId) {
   function enqueueProcessing(src) {
     pendingCount++;
     updateCounter();
-    const doSplit = split;
+    const asFigure = figureMode;
+    const doSplit = split && !asFigure;
+    if (asFigure) setFigureMode(false); // Abbildungsmodus gilt für ein Foto
     processing = processing.then(async () => {
       try {
-        const parts = await processCapture(src, { split: doSplit, scanFilter });
+        // Abbildungen in Farbe und ohne Scan-Filter
+        const parts = await processCapture(src, { split: doSplit, scanFilter: scanFilter && !asFigure });
         const group = [];
         captures.push(group);
         for (const part of parts) {
-          const page = await db.addPage(bookId, part);
+          let at = null;
+          const prevAfter = insertAfter;
+          if (insertAfter) {
+            const order = (await db.getBook(bookId)).pageOrder;
+            const i = order.indexOf(insertAfter);
+            at = i >= 0 ? i + 1 : null;
+          }
+          const page = await db.addPage(bookId, part, at);
           group.push(page.id);
-          ocr.enqueue(page.id);
+          group.prevAfter = group.prevAfter || prevAfter;
+          if (insertAfter) {
+            insertAfter = page.id;
+            insertLeft--;
+            if (insertLeft <= 0) endInsert(); else updateInsertBar();
+          }
+          if (asFigure) {
+            const fig = await cropFigure(part.image, { x: 0, y: 0, w: 1, h: 1 });
+            await db.addFigure({ bookId, pageId: page.id, ...fig, rect: { x: 0, y: 0, w: 1, h: 1 }, fullPage: true });
+            await db.updatePage(page.id, { text: '', paraY: [], ocrStatus: 'done' });
+          } else {
+            ocr.enqueue(page.id);
+          }
+          lastId = page.id;
           pool.clear();
-          lastThumb.replaceChildren(h('img', { src: pool.get(part.thumb), alt: '' }), h('span', { class: 'scan-thumb-label' }, 'Fertig'));
+          lastThumb.replaceChildren(h('img', { src: pool.get(part.thumb), alt: '' }), thumbLabel);
+          thumbLabel.textContent = asFigure ? 'Abbildung' : 'Fertig';
         }
       } catch (e) {
         console.error(e);
@@ -157,12 +224,19 @@ export async function openScanner(root, bookId) {
     const group = captures.pop();
     if (!group) { toast('Nichts zum Zurücknehmen'); return; }
     for (const id of group) await db.deletePage(id); // Doppelseite: beide Hälften
+    if (group.prevAfter !== undefined && (insertAfter && group.includes(insertAfter))) {
+      insertAfter = group.prevAfter;
+      insertLeft += group.length;
+      updateInsertBar();
+    }
     toast(group.length > 1 ? 'Letzte Doppelseite gelöscht' : 'Letzte Seite gelöscht');
     pool.clear();
     const lastGroup = captures[captures.length - 1];
     const prevId = lastGroup && lastGroup[lastGroup.length - 1];
     const prev = prevId ? await db.getPage(prevId) : null;
-    lastThumb.replaceChildren(...(prev ? [h('img', { src: pool.get(prev.thumb), alt: '' }), h('span', { class: 'scan-thumb-label' }, 'Fertig')] : []));
+    lastId = prev ? prev.id : null;
+    thumbLabel.textContent = prev && prev.printedNo ? `S. ${prev.printedNo}` : 'Fertig';
+    lastThumb.replaceChildren(...(prev ? [h('img', { src: pool.get(prev.thumb), alt: '' }), thumbLabel] : []));
     updateCounter();
   }
 
@@ -182,9 +256,73 @@ export async function openScanner(root, bookId) {
   };
   document.addEventListener('visibilitychange', onVis);
 
+  // ---------- Seitenzahlen prüfen, sobald die Texterkennung fertig ist ----------
+  const shown = new Set();
+  const queue = [];
+  let checkTimer = null;
+  const offDb = db.onChange((e) => {
+    if (e.bookId !== bookId || (e.type !== 'page' && e.type !== 'pages')) return;
+    clearTimeout(checkTimer);
+    checkTimer = setTimeout(runCheck, 400);
+  });
+  async function runCheck() {
+    const b = await db.getBook(bookId);
+    if (!b) return;
+    const pages = await db.getPagesMeta(bookId);
+    // Seitenzahl der letzten Aufnahme am Vorschaubild anzeigen
+    const last = pages.find((p) => p.id === lastId);
+    if (last && last.printedNo && !thumbLabel.textContent.startsWith('Abb')) thumbLabel.textContent = `S. ${last.printedNo}`;
+    const issues = checkPages(pages, { ignored: b.ignoredGaps || [], confirmedOnly: true });
+    // Nur Probleme melden, an denen eine in dieser Sitzung gescannte Seite beteiligt ist
+    const mine = new Set(captures.flat());
+    for (const is of issues) {
+      if (shown.has(is.key)) continue;
+      const involved = [is.afterPageId, is.beforePageId, is.pageId, ...(is.pageIds || [])].filter(Boolean);
+      if (!involved.some((id) => mine.has(id))) continue;
+      shown.add(is.key);
+      queue.push(is);
+    }
+    // Bereits behobene Hinweise ausblenden
+    const open = new Set(issues.map((x) => x.key));
+    for (let i = queue.length - 1; i >= 0; i--) if (!open.has(queue[i].key)) queue.splice(i, 1);
+    showNotice();
+  }
+  function showNotice() {
+    const is = queue[0];
+    if (!is) { notice.hidden = true; return; }
+    const next = () => { queue.shift(); showNotice(); };
+    const ignore = async () => {
+      await db.updateBook(bookId, (b) => ({ ignoredGaps: [...new Set([...(b.ignoredGaps || []), is.key])] }));
+      next();
+    };
+    const buttons = [];
+    if (is.type === 'missing') {
+      buttons.push(h('button', { class: 'btn small primary', onClick: () => {
+        insertAfter = is.afterPageId; insertLeft = is.count; updateInsertBar(); next();
+        toast('Jetzt die fehlende Seite fotografieren');
+      } }, icon('camera'), 'Nachscannen'));
+      buttons.push(h('button', { class: 'btn small', onClick: ignore }, 'Passt so'));
+    } else if (is.type === 'duplicate') {
+      buttons.push(h('button', { class: 'btn small primary', onClick: async () => {
+        await db.deletePage(is.pageIds[1]);
+        for (const g of captures) { const i = g.indexOf(is.pageIds[1]); if (i >= 0) g.splice(i, 1); }
+        updateCounter(); toast('Doppelte Seite gelöscht'); next();
+      } }, icon('trash'), 'Doppelte löschen'));
+      buttons.push(h('button', { class: 'btn small', onClick: ignore }, 'Behalten'));
+    } else {
+      buttons.push(h('button', { class: 'btn small', onClick: ignore }, 'Passt so'));
+      buttons.push(h('button', { class: 'btn small', onClick: next }, 'Später prüfen'));
+    }
+    notice.hidden = false;
+    notice.replaceChildren(h('div', { class: 'scan-notice-text' }, h('strong', {}, 'Achtung: '), describe(is)), h('div', { class: 'row gap-s wrap' }, ...buttons));
+    if (navigator.vibrate) navigator.vibrate([30, 60, 30]);
+  }
+
   start();
 
   return () => {
+    offDb();
+    clearTimeout(checkTimer);
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('visibilitychange', onVis);
     if (stream) stream.getTracks().forEach((t) => t.stop());

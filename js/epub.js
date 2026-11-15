@@ -3,6 +3,7 @@
 import * as db from './db.js';
 import { buildFlow } from './textproc.js';
 import { loadJSZip } from './zip.js';
+import { inlineXhtml } from './rich.js';
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const PAGES_PER_FILE = 20;
@@ -11,7 +12,13 @@ export async function exportEpub(bookId) {
   const JSZip = await loadJSZip();
   const book = await db.getBook(bookId);
   const pages = await db.getPagesMeta(bookId);
-  const flow = buildFlow(pages).filter((f) => !f.placeholder);
+  const figMap = new Map();
+  for (const f of await db.getFiguresOfBook(bookId)) {
+    if (!figMap.has(f.pageId)) figMap.set(f.pageId, []);
+    figMap.get(f.pageId).push(f);
+  }
+  const flow = buildFlow(pages, figMap).filter((f) => !f.placeholder);
+  const figFiles = [];
   const uuid = 'urn:uuid:openbook-' + book.id;
   const zip = new JSZip();
   zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
@@ -29,7 +36,19 @@ export async function exportEpub(bookId) {
       cur = { chunk, paras: [], from: f.pageIndex + 1, to: f.pageIndex + 1 };
       files.push(cur);
     }
-    cur.paras.push(f.text);
+    if (f.figure) {
+      const name = `fig-${f.figure.id}.jpg`;
+      zip.file('OEBPS/' + name, f.figure.image);
+      figFiles.push(name);
+      const cap = f.caption || f.figure.caption || '';
+      cur.paras.push({ html: `<figure><img src="${name}" alt="${esc(cap || 'Abbildung')}"/>${cap ? `<figcaption>${esc(cap)}</figcaption>` : ''}</figure>` });
+    } else {
+      const inner = inlineXhtml(f.md || f.text);
+      if (f.block === 'h1') cur.paras.push({ html: `<h2>${inner}</h2>` });
+      else if (f.block === 'h2') cur.paras.push({ html: `<h3>${inner}</h3>` });
+      else if (f.block === 'li') cur.paras.push({ html: `<p class="li l${Math.min(4, f.level || 0)}${f.ordered ? ' ol' : ''}">${f.ordered ? '' : ['•', '◦', '▪', '•', '◦'][Math.min(4, f.level || 0)] + ' '}${inner}</p>` });
+      else cur.paras.push({ html: `<p>${inner}</p>` });
+    }
     cur.to = Math.max(cur.to, f.pageIndex + 1, ...(f.continues || []).map((c) => c.pageIndex + 1));
   }
   const xhtml = (title, body) => `<?xml version="1.0" encoding="UTF-8"?>
@@ -41,10 +60,10 @@ export async function exportEpub(bookId) {
   files.forEach((f, i) => {
     f.name = `text${String(i + 1).padStart(3, '0')}.xhtml`;
     f.title = `Seiten ${f.from}–${f.to}`;
-    zip.file('OEBPS/' + f.name, xhtml(f.title, f.paras.map((p) => `<p>${esc(p)}</p>`).join('\n')));
+    zip.file('OEBPS/' + f.name, xhtml(f.title, f.paras.map((p) => (typeof p === 'string' ? `<p>${esc(p)}</p>` : p.html)).join('\n')));
   });
 
-  zip.file('OEBPS/style.css', 'body{margin:0 5%;} p{margin:0;text-indent:1.4em;text-align:justify;} p:first-child{text-indent:0;} h1{text-align:center;font-weight:normal;margin:30% 0 0.5em;} .author{text-align:center;font-style:italic;}');
+  zip.file('OEBPS/style.css', 'body{margin:0 5%;} p{margin:0;text-indent:1.4em;text-align:justify;} p:first-child{text-indent:0;} h1{text-align:center;font-weight:normal;margin:30% 0 0.5em;} figure{margin:1em 0;text-align:center;page-break-inside:avoid;} figure img{max-width:100%;max-height:90vh;} figcaption{font-size:0.85em;font-style:italic;} h2,h3{text-align:left;margin:1em 0 0.4em;page-break-after:avoid;} h2{font-size:1.3em;} h3{font-size:1.1em;} h2+p,h3+p{text-indent:0;} p.li{text-indent:-1em;margin:0.1em 0;text-align:left;} p.l0{margin-left:1.2em;} p.l1{margin-left:2.6em;} p.l2{margin-left:4em;} p.l3{margin-left:5.4em;} p.l4{margin-left:6.8em;} p.ol{text-indent:-1.4em;} .author{text-align:center;font-style:italic;}');
 
   const hasCover = !!book.cover;
   if (hasCover) zip.file('OEBPS/cover.jpg', book.cover);
@@ -82,6 +101,7 @@ ${files.map((f, i) => `<navPoint id="n${i + 1}" playOrder="${i + 2}"><navLabel><
     <item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>
     ${hasCover ? '<item id="cover-image" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>' : ''}
     ${files.map((f, i) => `<item id="t${i + 1}" href="${f.name}" media-type="application/xhtml+xml"/>`).join('\n    ')}
+    ${figFiles.map((n, i) => `<item id="img${i + 1}" href="${n}" media-type="image/jpeg"/>`).join('\n    ')}
   </manifest>
   <spine toc="ncx">
     <itemref idref="title"/>

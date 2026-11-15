@@ -2,14 +2,17 @@
 // Schrift/Thema einstellbar, Lesezeichen, Suche, Originalseiten-Ansicht.
 
 import * as db from './db.js';
+import * as profiles from './profiles.js';
 import { h, icon, iconButton, toast, sheet, UrlPool } from './ui.js';
 import { buildFlow } from './textproc.js';
+import { displayNumbers } from './pagecheck.js';
+import { renderInline } from './rich.js';
 
 const SECTION_PAGES = 25; // Buchseiten je gerendertem Abschnitt (hält das Layout schnell)
 const CHARS_PER_MIN = 1300; // ca. 230 Wörter/Minute
 
 const DEFAULTS = {
-  fontSize: 19, font: 'literata', lineHeight: 1.55, margin: 'm', align: 'justify', theme: 'paper', mode: 'text', footer: 'page',
+  fontSize: 19, font: 'literata', lineHeight: 1.55, margin: 'm', align: 'justify', theme: 'paper', mode: 'text', footer: 'page', paraStyle: 'auto',
 };
 const FONTS = {
   literata: { label: 'Literata', css: '"Literata", Georgia, "Times New Roman", serif' },
@@ -20,25 +23,49 @@ const FONTS = {
 const THEMES = { white: 'Weiß', paper: 'Papier', sepia: 'Sepia', dark: 'Dunkel', black: 'Schwarz' };
 const MARGINS = { s: 16, m: 28, l: 48 };
 
-function loadSettings() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('ob.reader') || '{}') }; } catch (e) { return { ...DEFAULTS }; }
-}
-function saveSettings(s) { try { localStorage.setItem('ob.reader', JSON.stringify(s)); } catch (e) { /* ignorieren */ } }
+// Leseeinstellungen gehören zum aktiven Profil (und werden mit ihm synchronisiert)
+function loadSettings() { return { ...DEFAULTS, ...profiles.getSettings() }; }
+function saveSettings(s) { profiles.saveSettings(s); }
 
 export async function openReader(root, bookId) {
   let book = await db.getBook(bookId);
   if (!book) { location.hash = '#/'; return; }
   let pages = await db.getPagesMeta(bookId);
   if (!pages.length) { location.hash = `#/book/${bookId}`; return; }
-  db.updateBook(bookId, { lastOpenedAt: Date.now() });
+  const profileId = profiles.currentId();
+  let state = (await db.getState(profileId, bookId)) || { position: null, bookmarks: [] };
+  let lastSavedAt = state.updatedAt || 0;
+  // Nur echtes Blättern zählt als neue Leseposition – bloßes Öffnen (oder ein anderes
+  // Layout auf diesem Gerät) darf die Position eines anderen Geräts nicht überschreiben.
+  let userMoved = false;
+  const userNav = () => { userMoved = true; };
+  db.updateState(profileId, bookId, { lastOpenedAt: Date.now() }, { touch: false });
 
   const settings = loadSettings();
   const pool = new UrlPool();
   let flow = [], cum = [], totalChars = 1, sections = [];
+  let figMap = new Map();
+  let numbers = { labels: [], total: null };
+  const figPool = new UrlPool();
+  async function loadFigures() {
+    figMap = new Map();
+    for (const f of await db.getFiguresOfBook(bookId)) {
+      if (!figMap.has(f.pageId)) figMap.set(f.pageId, []);
+      figMap.get(f.pageId).push(f);
+    }
+  }
+  // „Seite 47“ nach gedruckter Seitenzahl, sonst Position des Fotos
+  function pageLabel(pi) {
+    const n = numbers.labels[pi];
+    if (n) return `Seite ${n}`;
+    if (numbers.total) return 'Vorspann';
+    return `Seite ${pi + 1}`;
+  }
+  function pageTotal() { return numbers.total || pages.length; }
   let sectionIdx = -1, screen = 0, screens = 1, colW = 0, gap = 0;
   let imgIndex = 0;
   let menuOpen = false;
-  let pos = book.position || null; // { pageId, p, char, ratio }
+  let pos = state.position || null; // { pageId, p, char, ratio, pageIndex }
 
   // ---------- DOM ----------
   const content = h('div', { class: 'r-content', lang: 'de' });
@@ -86,11 +113,13 @@ export async function openReader(root, bookId) {
 
   // ---------- Fluss & Abschnitte ----------
   function rebuildFlow() {
-    flow = buildFlow(pages);
+    flow = buildFlow(pages, figMap);
+    numbers = displayNumbers(pages);
     cum = new Array(flow.length + 1);
     cum[0] = 0;
-    for (let i = 0; i < flow.length; i++) cum[i + 1] = cum[i] + flow[i].text.length + 1;
+    for (let i = 0; i < flow.length; i++) cum[i + 1] = cum[i] + flow[i].weight;
     totalChars = Math.max(1, cum[flow.length]);
+    updateParaStyle();
     sections = [];
     let start = 0;
     for (let i = 1; i <= flow.length; i++) {
@@ -130,14 +159,23 @@ export async function openReader(root, bookId) {
   function renderSection(si) {
     sectionIdx = si;
     const [a, b] = sections[si];
+    layout();
+    figPool.clear();
     const frag = document.createDocumentFragment();
     for (let i = a; i < b; i++) {
       const f = flow[i];
       const prevF = flow[i - 1];
-      const el = h('p', { 'data-fi': i, class: f.placeholder ? 'ph' : (prevF && prevF.placeholder) || i === a ? 'first' : '' });
+      if (f.figure) { frag.append(figureEl(f, i)); continue; }
+      const afterBreak = !prevF || prevF.placeholder || prevF.figure || (prevF.block && prevF.block !== 'p') || i === a;
+      let cls = f.placeholder ? 'ph' : f.block === 'h1' || f.block === 'h2' ? f.block : f.block === 'li' ? 'li' + (f.ordered ? ' ol' : '') : afterBreak ? 'first' : '';
+      if (f.block === 'li' && (!flow[i + 1] || flow[i + 1].block !== 'li')) cls += ' li-last';
+      const el = h('p', { 'data-fi': i, class: cls });
+      if (f.block === 'li') el.style.setProperty('--lv', f.level || 0);
       if (f.placeholder) {
         el.append(f.text + ' ');
         el.append(h('button', { class: 'linkish', 'data-show-page': f.pageIndex }, 'Original ansehen'));
+      } else if (f.md && f.md !== f.text) {
+        el.append(renderInline(f.md));
       } else {
         el.textContent = f.text;
       }
@@ -145,6 +183,31 @@ export async function openReader(root, bookId) {
     }
     content.replaceChildren(frag);
     measure();
+  }
+
+  // Abbildung mit fester Größe (damit sich das Seitenlayout beim Laden nicht verschiebt)
+  function figureEl(f, i) {
+    const fig = f.figure;
+    const caption = f.caption || fig.caption || '';
+    const capH = caption ? Math.round(settings.fontSize * 0.85 * 1.35 * 2 + 8) : 0;
+    const maxW = colW, maxH = Math.max(80, colHeight * 0.86 - capH);
+    const scale = Math.min(maxW / (fig.w || 1), maxH / (fig.h || 1));
+    const w = Math.max(40, Math.round((fig.w || 1) * scale)), hh = Math.max(40, Math.round((fig.h || 1) * scale));
+    return h('figure', { class: 'fig', 'data-fi': i, 'data-fig': fig.id },
+      h('img', { src: figPool.get(fig.image), alt: caption || 'Abbildung', width: w, height: hh, style: { width: w + 'px', height: hh + 'px' }, draggable: 'false' }),
+      caption ? h('figcaption', {}, caption) : null,
+    );
+  }
+
+  let colHeight = 400;
+  function layout() {
+    const m = MARGINS[settings.margin] || 28;
+    const W = viewport.clientWidth;
+    const H = viewport.clientHeight;
+    colW = Math.max(200, Math.min(W - 2 * m, Math.round(settings.fontSize * 34)));
+    const lh = Math.round(settings.fontSize * settings.lineHeight);
+    const vpad = Math.max(12, Math.round(m * 0.5));
+    colHeight = Math.max(lh * 3, Math.floor((H - 2 * vpad) / lh) * lh);
   }
 
   function measure() {
@@ -200,7 +263,7 @@ export async function openReader(root, bookId) {
           const fi = +el.dataset.fi;
           let char = 0;
           // Absatz beginnt auf früherem Bildschirm → Zeichenposition am Spaltenanfang ermitteln
-          if (rects[0].left - base < x0 - 1) char = charAtPoint(el, r.left + 2, r.top + 2);
+          if (rects[0].left - base < x0 - 1) char = charAtColumn(el, x0);
           return { fi, char };
         }
       }
@@ -209,23 +272,50 @@ export async function openReader(root, bookId) {
     return lastEl ? { fi: +lastEl.dataset.fi, char: 0 } : { fi: 0, char: 0 };
   }
 
-  function charAtPoint(el, x, y) {
-    let node = null, offset = 0;
-    if (document.caretPositionFromPoint) {
-      const cp = document.caretPositionFromPoint(x, y);
-      if (cp) { node = cp.offsetNode; offset = cp.offset; }
-    } else if (document.caretRangeFromPoint) {
-      const r = document.caretRangeFromPoint(x, y);
-      if (r) { node = r.startContainer; offset = r.startOffset; }
-    }
-    if (!node || !el.contains(node)) return 0;
+  // Erstes Zeichen des Absatzes, das in der Spalte ab x0 steht (binäre Suche über Zeichen-Rechtecke).
+  // Unabhängig von Menüs/Overlays, die über dem Text liegen könnten.
+  // Textknoten eines Absatzes (fett/kursiv erzeugt mehrere) mit fortlaufenden Zeichenpositionen
+  function textNodes(el) {
+    const nodes = [];
     let total = 0;
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
-      if (walker.currentNode === node) return total + offset;
-      total += walker.currentNode.length;
+      const n = walker.currentNode;
+      if (n.parentElement && n.parentElement.closest('button')) continue;
+      nodes.push({ n, start: total });
+      total += n.length;
     }
-    return 0;
+    return { nodes, total };
+  }
+  function nodeAt(tn, off) {
+    let k = tn.nodes.length - 1;
+    while (k > 0 && tn.nodes[k].start > off) k--;
+    const e = tn.nodes[k];
+    return e ? { node: e.n, off: Math.min(off - e.start, e.n.length - 1) } : null;
+  }
+
+  // Erstes Zeichen des Absatzes, das in der Spalte ab x0 steht (binäre Suche über Zeichen-Rechtecke).
+  // Unabhängig von Menüs/Overlays, die über dem Text liegen könnten.
+  function charAtColumn(el, x0) {
+    const tn = textNodes(el);
+    if (!tn.total) return 0;
+    const base = content.getBoundingClientRect().left;
+    const r = document.createRange();
+    const leftOf = (i) => {
+      const at = nodeAt(tn, i);
+      r.setStart(at.node, at.off); r.setEnd(at.node, at.off + 1);
+      const rc = r.getClientRects()[0] || r.getBoundingClientRect();
+      return rc.left - base;
+    };
+    let lo = 0, hi = tn.total - 1, ans = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (leftOf(mid) >= x0 - 1) { ans = mid; hi = mid - 1; } else lo = mid + 1;
+    }
+    // Leerzeichen am Spaltenanfang überspringen
+    const charAt = (i) => { const at = nodeAt(tn, i); return at.node.data[at.off]; };
+    while (ans < tn.total - 1 && /\s/.test(charAt(ans))) ans++;
+    return ans;
   }
 
   function screenOfChar(fi, char) {
@@ -233,12 +323,15 @@ export async function openReader(root, bookId) {
     if (!el) return 0;
     const base = content.getBoundingClientRect().left;
     let rect = null;
-    if (char > 0 && el.firstChild && el.firstChild.nodeType === 3) {
-      const r = document.createRange();
-      const off = Math.min(char, el.firstChild.length - 1);
-      r.setStart(el.firstChild, Math.max(0, off));
-      r.setEnd(el.firstChild, Math.max(0, off) + 1);
-      rect = r.getClientRects()[0] || null;
+    if (char > 0) {
+      const tn = textNodes(el);
+      if (tn.total) {
+        const at = nodeAt(tn, Math.min(char, tn.total - 1));
+        const r = document.createRange();
+        r.setStart(at.node, Math.max(0, at.off));
+        r.setEnd(at.node, Math.max(0, at.off) + 1);
+        rect = r.getClientRects()[0] || null;
+      }
     }
     if (!rect) rect = el.getClientRects()[0];
     if (!rect) return 0;
@@ -268,7 +361,9 @@ export async function openReader(root, bookId) {
     imgIndex = Math.max(0, Math.min(pages.length - 1, i));
     pool.clear();
     const p = pages[imgIndex];
-    imgView.replaceChildren(h('img', { src: pool.get(p.image), alt: `Seite ${imgIndex + 1}`, draggable: 'false' }));
+    imgView.replaceChildren(p.image
+      ? h('img', { src: pool.get(p.image), alt: `Seite ${imgIndex + 1}`, draggable: 'false' })
+      : h('div', { class: 'r-noimage' }, h('p', {}, `Seite ${imgIndex + 1}`), h('p', { class: 'muted small' }, 'Das Originalfoto liegt nur auf dem Gerät, mit dem die Seite gescannt wurde. Synchronisiert wird nur der Text.')));
     imgView.classList.toggle('zoomed', zoomed);
     imgView.scrollTo(0, 0);
     // Position so speichern, dass die Textansicht dieselbe Buchseite findet
@@ -285,6 +380,7 @@ export async function openReader(root, bookId) {
 
   // ---------- Navigation ----------
   function next() {
+    userNav();
     if (settings.mode === 'images') {
       if (imgIndex < pages.length - 1) renderImage(imgIndex + 1); else endOfBook();
       return;
@@ -294,6 +390,7 @@ export async function openReader(root, bookId) {
     else endOfBook();
   }
   function prev() {
+    userNav();
     if (settings.mode === 'images') { if (imgIndex > 0) renderImage(imgIndex - 1); return; }
     if (screen > 0) showScreen(screen - 1, true);
     else if (sectionIdx > 0) { renderSection(sectionIdx - 1); showScreen(screens - 1); }
@@ -307,7 +404,7 @@ export async function openReader(root, bookId) {
     if (!sliderDragging) slider.value = Math.round((pos?.ratio || 0) * 1000);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      if (pos) db.updateBook(bookId, { position: pos, lastOpenedAt: Date.now() });
+      if (pos && userMoved) { lastSavedAt = Date.now(); db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now() }); }
     }, 400);
   }
 
@@ -326,13 +423,13 @@ export async function openReader(root, bookId) {
     if (!pos) return;
     const pct = Math.round((pos.ratio || 0) * 100);
     footRight.textContent = `${pct} %`;
-    const pi = (pos.pageIndex ?? 0) + 1;
+    const pi = pos.pageIndex ?? 0;
     const left = (1 - (pos.ratio || 0)) * totalChars / CHARS_PER_MIN;
     const leftTxt = left < 1 ? 'weniger als 1 Min.' : left < 60 ? `${Math.round(left)} Min.` : `${Math.floor(left / 60)} Std. ${Math.round(left % 60)} Min.`;
     footLeft.textContent = settings.footer === 'time'
       ? `Noch ${leftTxt} im Buch`
-      : settings.footer === 'none' ? '' : `Seite ${pi} von ${pages.length}`;
-    sliderLabel.textContent = `Seite ${pi} von ${pages.length} · ${pct} %`;
+      : settings.footer === 'none' ? '' : `${pageLabel(pi)} von ${pageTotal()}`;
+    sliderLabel.textContent = `${pageLabel(pi)} von ${pageTotal()} · ${pct} %`;
   }
   function cycleFooter() {
     settings.footer = { page: 'time', time: 'none', none: 'page' }[settings.footer] || 'page';
@@ -355,7 +452,7 @@ export async function openReader(root, bookId) {
     return [start, end];
   }
   function bookmarkHere() {
-    const bms = book.bookmarks || [];
+    const bms = state.bookmarks || [];
     if (settings.mode === 'images') return bms.find((b) => b.pageIndex === imgIndex && b.image);
     const r = currentRange();
     return bms.find((b) => !b.image && (() => { const g = globalOf(b); return g >= r[0] && g < r[1]; })());
@@ -367,18 +464,20 @@ export async function openReader(root, bookId) {
   }
   async function toggleBookmark() {
     const existing = bookmarkHere();
-    let bms = [...(book.bookmarks || [])];
+    let bms = [...(state.bookmarks || [])];
     if (existing) {
       bms = bms.filter((b) => b !== existing);
       toast('Lesezeichen entfernt');
     } else {
       const fi = settings.mode === 'images' ? flowIndexFor(pos) : locate(screen).fi;
       const f = flow[fi];
-      const snippet = settings.mode === 'images' ? `Seite ${imgIndex + 1} (Original)` : f.text.slice(pos.char || 0, (pos.char || 0) + 90).trim() + '…';
+      const snippet = settings.mode === 'images' ? `${pageLabel(imgIndex)} (Original)`
+        : f.figure ? 'Abbildung' + (f.figure.caption ? ': ' + f.figure.caption : '')
+          : f.text.slice(pos.char || 0, (pos.char || 0) + 90).trim() + '…';
       bms.push({ ...pos, label: snippet, createdAt: Date.now(), image: settings.mode === 'images', pageIndex: pos.pageIndex });
       toast('Lesezeichen gesetzt');
     }
-    book = await db.updateBook(bookId, { bookmarks: bms });
+    state = await db.updateState(profileId, bookId, { bookmarks: bms });
     updateBookmarkState();
   }
 
@@ -391,10 +490,10 @@ export async function openReader(root, bookId) {
       tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.t === which));
       thumbPool.clear();
       if (which === 'bm') {
-        const bms = [...(book.bookmarks || [])].sort((a, b) => globalOf(a) - globalOf(b));
+        const bms = [...(state.bookmarks || [])].sort((a, b) => globalOf(a) - globalOf(b));
         list.replaceChildren(...(bms.length ? bms.map((b) => h('button', { class: 'menu-item multi', onClick: () => { s.close(); jumpTo(b); } },
           icon('bookmark'),
-          h('span', {}, h('span', { class: 'small muted' }, `Seite ${(b.pageIndex ?? 0) + 1} · ${Math.round((b.ratio || 0) * 100)} %`), h('br'), b.label),
+          h('span', {}, h('span', { class: 'small muted' }, `${pageLabel(b.pageIndex ?? 0)} · ${Math.round((b.ratio || 0) * 100)} %`), h('br'), b.label),
         )) : [h('p', { class: 'muted' }, 'Noch keine Lesezeichen. Tippe oben auf das Lesezeichen-Symbol, um eins zu setzen.')]));
       } else {
         list.replaceChildren(h('div', { class: 'pages-grid compact' }, ...pages.map((p, i) => h('button', {
@@ -408,16 +507,18 @@ export async function openReader(root, bookId) {
       h('button', { 'data-t': 'pages', onClick: () => show('pages') }, 'Seiten'),
     );
     const s = sheet('Inhalt', h('div', { class: 'stack' }, tabs, list), { onClose: () => thumbPool.clear() });
-    show((book.bookmarks || []).length ? 'bm' : 'pages');
+    show((state.bookmarks || []).length ? 'bm' : 'pages');
   }
 
   function jumpTo(b) {
+    userNav();
     closeMenu();
     if (settings.mode === 'images') { renderImage(b.pageIndex ?? 0); return; }
     const fi = flowIndexFor(b);
     goToFlow(fi, flow[fi] && flow[fi].pageId === b.pageId && flow[fi].p === b.p ? b.char || 0 : 0);
   }
   function jumpToPage(i) {
+    userNav();
     closeMenu();
     if (settings.mode === 'images') { renderImage(i); return; }
     let fi = flow.findIndex((f) => f.pageIndex === i);
@@ -454,9 +555,9 @@ export async function openReader(root, bookId) {
         ...out.map(({ fi, char }) => {
           const txt = flow[fi].text;
           const a = Math.max(0, char - 50), b = Math.min(txt.length, char + q.length + 60);
-          return h('button', { class: 'menu-item multi', onClick: () => { s.close(); closeMenu(); goToFlow(fi, char); } },
+          return h('button', { class: 'menu-item multi', onClick: () => { s.close(); closeMenu(); userNav(); goToFlow(fi, char); } },
             h('span', {},
-              h('span', { class: 'small muted' }, `Seite ${sourcePageAt(fi, char) + 1}`), h('br'),
+              h('span', { class: 'small muted' }, pageLabel(sourcePageAt(fi, char))), h('br'),
               (a > 0 ? '…' : '') + txt.slice(a, char), h('mark', {}, txt.slice(char, char + q.length)), txt.slice(char + q.length, b) + (b < txt.length ? '…' : ''),
             ));
         }),
@@ -471,12 +572,19 @@ export async function openReader(root, bookId) {
   }
 
   // ---------- Darstellung ----------
+  // Absätze: Einzug (Roman) oder Abstand (Fachtext); automatisch je nach Inhalt
+  function updateParaStyle() {
+    const structured = flow.some((f) => f.block && f.block !== 'p');
+    content.classList.toggle('para-space', settings.paraStyle === 'space' || (settings.paraStyle === 'auto' && structured));
+  }
+
   function applySettings() {
     view.dataset.theme = settings.theme;
     content.style.fontFamily = (FONTS[settings.font] || FONTS.literata).css;
     content.style.fontSize = settings.fontSize + 'px';
     content.style.lineHeight = String(settings.lineHeight);
     content.style.textAlign = settings.align;
+    updateParaStyle();
     content.style.hyphens = settings.align === 'justify' ? 'auto' : 'manual';
     frame.hidden = settings.mode !== 'text';
     imgView.hidden = settings.mode !== 'images';
@@ -548,6 +656,7 @@ export async function openReader(root, bookId) {
       h('strong', {}, 'Zeilenabstand'), seg('lineHeight', { 1.35: 'Eng', 1.55: 'Normal', 1.8: 'Weit' }),
       h('strong', {}, 'Ränder'), seg('margin', { s: 'Schmal', m: 'Normal', l: 'Breit' }),
       h('strong', {}, 'Ausrichtung'), seg('align', { justify: 'Blocksatz', left: 'Linksbündig' }),
+      h('strong', {}, 'Absätze'), seg('paraStyle', { auto: 'Automatisch', indent: 'Einzug', space: 'Abstand' }),
     ));
   }
 
@@ -562,6 +671,28 @@ export async function openReader(root, bookId) {
     toast(settings.mode === 'images' ? 'Originalfotos' : 'Textansicht');
   }
 
+  // ---------- Abbildung vergrößert ansehen ----------
+  function openFigure(id) {
+    const fig = [...figMap.values()].flat().find((f) => f.id === id);
+    if (!fig) return;
+    const item = flow.find((f) => f.figure && f.figure.id === id);
+    const caption = (item && item.caption) || fig.caption || '';
+    const url = URL.createObjectURL(fig.image);
+    let zoom = false;
+    const img = h('img', { src: url, alt: caption || 'Abbildung', draggable: 'false' });
+    const stage = h('div', { class: 'fv-stage' }, img);
+    const close = () => { ov.remove(); URL.revokeObjectURL(url); document.removeEventListener('keydown', onEsc, true); };
+    const onEsc = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } };
+    const zoomBtn = iconButton('zoom', 'Vergrößern', () => { zoom = !zoom; stage.classList.toggle('zoomed', zoom); });
+    const ov = h('div', { class: 'figviewer', role: 'dialog', 'aria-label': 'Abbildung' },
+      h('div', { class: 'fv-bar' }, iconButton('close', 'Schließen', close), h('div', { class: 'grow fv-cap' }, caption), zoomBtn),
+      stage,
+    );
+    stage.addEventListener('dblclick', () => { zoom = !zoom; stage.classList.toggle('zoomed', zoom); });
+    document.addEventListener('keydown', onEsc, true);
+    document.body.append(ov);
+  }
+
   // ---------- Menü ----------
   function openMenu() { menuOpen = true; view.classList.add('menu-open'); }
   function closeMenu() { menuOpen = false; view.classList.remove('menu-open'); }
@@ -571,13 +702,14 @@ export async function openReader(root, bookId) {
     sliderDragging = true;
     const r = slider.value / 1000;
     if (settings.mode === 'images') {
-      sliderLabel.textContent = `Seite ${Math.round(r * (pages.length - 1)) + 1} von ${pages.length}`;
+      sliderLabel.textContent = `${pageLabel(Math.round(r * (pages.length - 1)))} von ${pageTotal()}`;
     } else {
       const fi = flowIndexAtGlobal(r * totalChars);
-      sliderLabel.textContent = `Seite ${sourcePageAt(fi, 0) + 1} von ${pages.length} · ${Math.round(r * 100)} %`;
+      sliderLabel.textContent = `${pageLabel(sourcePageAt(fi, 0))} von ${pageTotal()} · ${Math.round(r * 100)} %`;
     }
   });
   slider.addEventListener('change', () => {
+    userNav();
     const r = slider.value / 1000;
     sliderDragging = false;
     if (settings.mode === 'images') renderImage(Math.round(r * (pages.length - 1)));
@@ -600,6 +732,8 @@ export async function openReader(root, bookId) {
     start = null;
     const showBtn = e.target.closest && e.target.closest('[data-show-page]');
     if (showBtn) { switchModeTo('images', +showBtn.dataset.showPage); return; }
+    const figEl = e.target.closest && e.target.closest('figure.fig');
+    if (figEl && !menuOpen && Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 600) { openFigure(figEl.dataset.fig); return; }
     if (zoomed && settings.mode === 'images') { if (menuOpen) closeMenu(); else if (Math.abs(dx) < 8 && Math.abs(dy) < 8) openMenu(); return; }
     if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.3 && dt < 800) {
       if (menuOpen) closeMenu();
@@ -618,6 +752,7 @@ export async function openReader(root, bookId) {
   viewport.addEventListener('pointercancel', () => { start = null; });
 
   function switchModeTo(mode, pi) {
+    userNav();
     if (settings.mode !== mode) {
       settings.mode = mode; saveSettings(settings); applySettings();
     }
@@ -646,22 +781,57 @@ export async function openReader(root, bookId) {
   const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(relayout, 150); };
   window.addEventListener('resize', onResize);
 
-  // Neue OCR-Ergebnisse einarbeiten, ohne die Leseposition zu verlieren
+  // Neue OCR-Ergebnisse und synchronisierte Änderungen einarbeiten, ohne die Leseposition zu verlieren
   let refreshTimer = null;
   const off = db.onChange((e) => {
-    if (e.bookId !== bookId) return;
-    if (e.type === 'book') return;
+    const isSync = e.type === 'sync';
+    if (!isSync && (e.bookId !== bookId || e.type === 'book' || e.type === 'state' || e.type === 'profile')) return;
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(async () => {
       const keep = pos;
-      pages = await db.getPagesMeta(bookId);
-      book = await db.getBook(bookId);
-      if (!pages.length) return;
-      rebuildFlow();
-      pos = keep;
-      restore();
-    }, 1200);
+      const newPages = await db.getPagesMeta(bookId);
+      book = (await db.getBook(bookId)) || book;
+      if (!newPages.length) return;
+      const figCount = [...figMap.values()].flat().length;
+      await loadFigures();
+      const figChanged = e.type === 'figure' || [...figMap.values()].flat().length !== figCount;
+      const textChanged = figChanged || newPages.length !== pages.length || newPages.some((p, i) => p.id !== pages[i].id || p.text !== pages[i].text || p.printedNo !== pages[i].printedNo);
+      pages = newPages;
+      if (textChanged) {
+        rebuildFlow();
+        pos = keep;
+        if (settings.mode === 'images') renderImage(Math.min(imgIndex, pages.length - 1)); else restore();
+      }
+      if (isSync) checkRemotePosition();
+    }, isSync ? 50 : 1200);
   });
+
+  // Wurde auf einem anderen Gerät (gleiches Profil) weitergelesen? → anbieten, dorthin zu springen
+  const banner = h('div', { class: 'r-banner', hidden: true });
+  view.append(banner);
+  async function checkRemotePosition() {
+    const s = await db.getState(profileId, bookId);
+    if (!s) return;
+    state = s;
+    updateBookmarkState();
+    const rp = s.position;
+    if (!rp || (s.updatedAt || 0) <= lastSavedAt || !pos) return;
+    if (Math.abs((rp.ratio || 0) - (pos.ratio || 0)) < 0.005) return;
+    if (!userMoved) {
+      // Noch nicht geblättert → einfach zur neuesten Stelle springen
+      lastSavedAt = s.updatedAt;
+      pos = rp;
+      if (settings.mode === 'images') renderImage(rp.pageIndex ?? 0); else restore();
+      toast('Leseposition vom anderen Gerät übernommen');
+      return;
+    }
+    banner.replaceChildren(
+      h('span', {}, `Auf einem anderen Gerät bis ${pageLabel(rp.pageIndex ?? 0)} (${Math.round((rp.ratio || 0) * 100)} %) gelesen.`),
+      h('button', { class: 'btn small primary', onClick: (ev) => { ev.stopPropagation(); banner.hidden = true; lastSavedAt = s.updatedAt; pos = rp; if (settings.mode === 'images') renderImage(rp.pageIndex ?? 0); else restore(); } }, 'Dorthin'),
+      h('button', { class: 'btn small', onClick: (ev) => { ev.stopPropagation(); banner.hidden = true; lastSavedAt = Date.now(); } }, 'Hierbleiben'),
+    );
+    banner.hidden = false;
+  }
 
   // Wakelock: Bildschirm beim Lesen nicht abschalten
   let wakeLock = null;
@@ -672,6 +842,7 @@ export async function openReader(root, bookId) {
 
   // Schrift laden, bevor gemessen wird
   try { await document.fonts.load(`${settings.fontSize}px Literata`); } catch (e) { /* ignorieren */ }
+  await loadFigures();
   rebuildFlow();
   restore();
   try {
@@ -683,7 +854,7 @@ export async function openReader(root, bookId) {
 
   return () => {
     clearTimeout(saveTimer);
-    if (pos) db.updateBook(bookId, { position: pos, lastOpenedAt: Date.now() });
+    if (pos && userMoved) db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now() });
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('visibilitychange', onVis);
     window.removeEventListener('resize', onResize);
@@ -691,5 +862,6 @@ export async function openReader(root, bookId) {
     off();
     if (wakeLock) wakeLock.release().catch(() => {});
     pool.clear();
+    figPool.clear();
   };
 }

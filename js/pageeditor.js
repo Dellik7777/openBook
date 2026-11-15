@@ -3,7 +3,7 @@
 import * as db from './db.js';
 import * as ocr from './ocr.js';
 import { h, icon, iconButton, toast, confirmDialog, UrlPool } from './ui.js';
-import { rotate, crop } from './imageproc.js';
+import { rotate, crop, cropFigure } from './imageproc.js';
 
 export async function openPageEditor(root, bookId, pageId) {
   const pool = new UrlPool();
@@ -13,21 +13,37 @@ export async function openPageEditor(root, bookId, pageId) {
 
   const img = h('img', { class: 'pe-img', alt: 'Seitenfoto', draggable: 'false' });
   const cropBox = h('div', { class: 'crop-box', hidden: true });
-  const imgWrap = h('div', { class: 'pe-imgwrap' }, img, cropBox);
+  const figBoxes = h('div', { class: 'fig-boxes' });
+  const imgWrap = h('div', { class: 'pe-imgwrap' }, img, figBoxes, cropBox);
+  const figList = h('div', { class: 'fig-list' });
+  const printedNo = h('input', { class: 'input pn-input', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '–', 'aria-label': 'Gedruckte Seitenzahl' });
+  const pnHint = h('span', { class: 'muted small' });
+  let cropMode = 'crop';
   const text = h('textarea', { class: 'input pe-text', spellcheck: 'true', lang: 'de', placeholder: 'Noch kein Text erkannt.' });
   const status = h('div', { class: 'muted small' });
   const title = h('div', { class: 'grow pe-title' });
+  const cropOk = h('button', { class: 'btn small primary', onClick: () => endCrop(true) }, icon('check'), 'Zuschneiden');
   const cropBtns = h('div', { class: 'row gap-s', hidden: true },
     h('button', { class: 'btn small', onClick: () => endCrop(false) }, 'Abbrechen'),
-    h('button', { class: 'btn small primary', onClick: () => endCrop(true) }, icon('check'), 'Zuschneiden'),
+    cropOk,
   );
-  const tools = h('div', { class: 'row gap-s wrap' },
+  const noImage = h('div', { class: 'pe-noimage', hidden: true },
+    h('p', {}, 'Kein Foto auf diesem Gerät'),
+    h('p', { class: 'muted small' }, 'Diese Seite wurde auf einem anderen Gerät gescannt. Synchronisiert wird nur der Text; das Foto bleibt dort.'),
+  );
+  const imgTools = [
     h('button', { class: 'btn small', onClick: () => doRotate(-90) }, icon('rotate', 'flip'), 'Links'),
     h('button', { class: 'btn small', onClick: () => doRotate(90) }, icon('rotate'), 'Rechts'),
-    h('button', { class: 'btn small', onClick: () => startCrop() }, icon('crop'), 'Zuschneiden'),
+    h('button', { class: 'btn small', onClick: () => startCrop('crop') }, icon('crop'), 'Zuschneiden'),
+    h('button', { class: 'btn small', onClick: () => startCrop('figure') }, icon('figure'), 'Abbildung markieren'),
+    h('button', { class: 'btn small', onClick: () => wholePageFigure() }, icon('image'), 'Ganze Seite ist Abbildung'),
+  ];
+  const rerunBtn = h('button', { class: 'btn small', onClick: () => rerun() }, icon('refresh'), 'Neu erkennen');
+  const tools = h('div', { class: 'row gap-s wrap' },
+    ...imgTools,
     h('button', { class: 'btn small', onClick: () => move(-1) }, icon('left'), 'Nach vorn'),
     h('button', { class: 'btn small', onClick: () => move(1) }, 'Nach hinten', icon('right')),
-    h('button', { class: 'btn small', onClick: () => rerun() }, icon('refresh'), 'Neu erkennen'),
+    rerunBtn,
     h('button', { class: 'btn small danger', onClick: () => remove() }, icon('trash'), 'Löschen'),
   );
   const prevBtn = iconButton('left', 'Vorherige Seite', () => step(-1));
@@ -39,10 +55,11 @@ export async function openPageEditor(root, bookId, pageId) {
       title, prevBtn, nextBtn,
     ),
     h('div', { class: 'pe-layout' },
-      h('div', { class: 'pe-left' }, imgWrap, cropBtns, tools),
+      h('div', { class: 'pe-left' }, imgWrap, noImage, cropBtns, tools, figList),
       h('div', { class: 'pe-right' },
+        h('label', { class: 'row gap-s pn-row' }, h('strong', {}, 'Gedruckte Seitenzahl'), printedNo, pnHint),
         h('div', { class: 'row between' }, h('strong', {}, 'Erkannter Text'), status),
-        h('p', { class: 'muted small' }, 'Absätze mit einer Leerzeile trennen. Änderungen werden automatisch gespeichert.'),
+        h('p', { class: 'muted small' }, 'Absätze mit einer Leerzeile trennen. Formatierung: **fett**, *kursiv*, „- “ am Anfang für Aufzählungen (je Ebene 2 Leerzeichen davor), „## “ für Überschriften. Änderungen werden automatisch gespeichert.'),
         text,
       ),
     ),
@@ -51,20 +68,76 @@ export async function openPageEditor(root, bookId, pageId) {
 
   function render() {
     const idx = book.pageOrder.indexOf(pageId);
-    title.textContent = `Seite ${idx + 1} von ${book.pageOrder.length}`;
+    title.textContent = page.printedNo
+      ? `Seite ${page.printedNo} · Foto ${idx + 1}/${book.pageOrder.length}`
+      : `Foto ${idx + 1} von ${book.pageOrder.length}`;
     prevBtn.disabled = idx <= 0;
     nextBtn.disabled = idx >= book.pageOrder.length - 1;
     pool.clear();
-    img.src = pool.get(page.image);
+    const hasImg = !!page.image;
+    imgWrap.hidden = !hasImg;
+    noImage.hidden = hasImg;
+    for (const b of [...imgTools, rerunBtn]) b.hidden = !hasImg;
+    if (hasImg) img.src = pool.get(page.image);
+    if (document.activeElement !== printedNo) printedNo.value = page.printedNo ?? '';
+    pnHint.textContent = page.printedNoManual ? 'von Hand' : page.printedNo ? 'erkannt' : (page.ocrStatus === 'done' ? 'keine erkannt' : '');
+    renderFigures();
     if (document.activeElement !== text) text.value = page.text || '';
     const st = {
       pending: 'Wartet auf Erkennung',
       running: 'Text wird erkannt …',
+      remote: 'Wird auf dem anderen Gerät erkannt',
       done: page.confidence != null ? `Erkannt · Sicherheit ${page.confidence} %` : 'Erkannt',
       error: 'Erkennung fehlgeschlagen',
     }[page.ocrStatus];
     status.textContent = st || '';
-    text.disabled = page.ocrStatus === 'running' || page.ocrStatus === 'pending';
+    text.disabled = ['running', 'pending', 'remote'].includes(page.ocrStatus);
+  }
+
+  printedNo.addEventListener('change', async () => {
+    const v = printedNo.value.trim();
+    const n = parseInt(v, 10);
+    page = await db.updatePage(pageId, v === '' ? { printedNo: null, printedNoManual: false } : { printedNo: Number.isFinite(n) && n > 0 ? n : null, printedNoManual: true });
+    render();
+  });
+
+  // ---------- Abbildungen ----------
+  let figures = [];
+  const figPool = new UrlPool();
+  async function renderFigures() {
+    figures = (await db.getFiguresOfPage(pageId)).sort((a, b) => a.rect.y - b.rect.y);
+    figPool.clear();
+    figBoxes.replaceChildren(...figures.filter((f) => !f.fullPage).map((f, i) => h('div', {
+      class: 'fig-box',
+      style: { left: f.rect.x * 100 + '%', top: f.rect.y * 100 + '%', width: f.rect.w * 100 + '%', height: f.rect.h * 100 + '%' },
+    }, h('span', {}, 'Abb. ' + (i + 1)))));
+    if (!figures.length) { figList.replaceChildren(); return; }
+    figList.replaceChildren(
+      h('strong', {}, figures.length === 1 ? 'Abbildung auf dieser Seite' : `${figures.length} Abbildungen auf dieser Seite`),
+      ...figures.map((f) => {
+        const cap = h('input', { class: 'input', value: f.caption || '', placeholder: 'Bildunterschrift (optional)', onChange: (e) => db.updateFigure(f.id, { caption: e.target.value.trim() }) });
+        return h('div', { class: 'fig-item' },
+          h('img', { src: figPool.get(f.image), alt: f.caption || 'Abbildung' }),
+          h('div', { class: 'grow stack-s' }, f.fullPage ? h('span', { class: 'muted small' }, 'Ganze Seite') : null, cap),
+          iconButton('trash', 'Abbildung entfernen', async () => {
+            if (!(await confirmDialog('Abbildung entfernen?', 'Die Abbildung erscheint dann nicht mehr im Lesetext. Das Seitenfoto bleibt erhalten.', 'Entfernen', true))) return;
+            await db.deleteFigure(f.id);
+            if (f.fullPage || page.text !== null) askRerun('Soll der Text dieser Seite jetzt neu erkannt werden (inklusive des bisher ausgeblendeten Bereichs)?');
+            renderFigures();
+          }, 'small'),
+        );
+      }),
+    );
+  }
+
+  async function wholePageFigure() {
+    if (figures.some((f) => f.fullPage)) { toast('Diese Seite ist schon als Abbildung markiert'); return; }
+    if (page.text && !(await confirmDialog('Ganze Seite als Abbildung?', 'Die Seite erscheint im Lesetext als Bild. Der erkannte Text dieser Seite wird entfernt.', 'Übernehmen'))) return;
+    const res = await cropFigure(page.image, { x: 0, y: 0, w: 1, h: 1 });
+    await db.addFigure({ bookId, pageId, ...res, rect: { x: 0, y: 0, w: 1, h: 1 }, fullPage: true });
+    page = await db.updatePage(pageId, { text: '', paraY: [], ocrStatus: 'done' });
+    toast('Seite ist jetzt eine Abbildung');
+    render();
   }
 
   let saveTimer = null;
@@ -80,7 +153,18 @@ export async function openPageEditor(root, bookId, pageId) {
     status.textContent = 'Gespeichert';
   }
 
+  // Drehen/Zuschneiden verschiebt die markierten Bereiche → Markierungen vorher entfernen
+  async function confirmDropFigures() {
+    const figs = await db.getFiguresOfPage(pageId);
+    const marked = figs.filter((f) => !f.fullPage);
+    if (!marked.length) return true;
+    if (!(await confirmDialog('Abbildungen neu markieren?', 'Danach passen die markierten Abbildungen nicht mehr zum Foto. Sie werden entfernt und können neu markiert werden.', 'Weiter'))) return false;
+    for (const f of marked) await db.deleteFigure(f.id);
+    return true;
+  }
+
   async function doRotate(deg) {
+    if (!(await confirmDropFigures())) return;
     toast('Wird gedreht …');
     const r = await rotate(page.image, deg);
     page = await db.updatePage(pageId, { ...r });
@@ -88,8 +172,8 @@ export async function openPageEditor(root, bookId, pageId) {
     askRerun();
   }
 
-  async function askRerun() {
-    if (await confirmDialog('Text neu erkennen?', 'Das Foto wurde geändert. Soll der Text dieser Seite neu erkannt werden?', 'Neu erkennen')) rerun(true);
+  async function askRerun(msg = 'Das Foto wurde geändert. Soll der Text dieser Seite neu erkannt werden?') {
+    if (await confirmDialog('Text neu erkennen?', msg, 'Neu erkennen')) rerun(true);
   }
 
   async function rerun(skipConfirm = false) {
@@ -130,14 +214,17 @@ export async function openPageEditor(root, bookId, pageId) {
 
   // ---------- Zuschneiden ----------
   let cropRect = null, cropStart = null;
-  function startCrop() {
-    cropRect = { x: 0.05, y: 0.05, w: 0.9, h: 0.9 };
+  function startCrop(mode) {
+    cropMode = mode;
+    cropOk.replaceChildren(icon('check'), mode === 'figure' ? 'Als Abbildung speichern' : 'Zuschneiden');
+    cropBox.classList.toggle('figure', mode === 'figure');
+    cropRect = mode === 'figure' ? { x: 0.15, y: 0.3, w: 0.7, h: 0.35 } : { x: 0.05, y: 0.05, w: 0.9, h: 0.9 };
     cropBox.hidden = false;
     cropBtns.hidden = false;
     tools.hidden = true;
     imgWrap.classList.add('cropping');
     drawCrop();
-    toast('Rahmen über den gewünschten Bereich ziehen');
+    toast(mode === 'figure' ? 'Rahmen um das Bild, die Karte oder das Diagramm ziehen' : 'Rahmen über den gewünschten Bereich ziehen');
   }
   function drawCrop() {
     Object.assign(cropBox.style, {
@@ -173,6 +260,15 @@ export async function openPageEditor(root, bookId, pageId) {
     tools.hidden = false;
     imgWrap.classList.remove('cropping');
     if (!apply || !r || r.w < 0.05 || r.h < 0.05) return;
+    if (cropMode === 'figure') {
+      const res = await cropFigure(page.image, r);
+      await db.addFigure({ bookId, pageId, ...res, rect: r });
+      toast('Abbildung gespeichert');
+      render();
+      if (page.text) askRerun('Soll der Text dieser Seite neu erkannt werden? Beschriftungen innerhalb der Abbildung landen dann nicht mehr im Lesetext.');
+      return;
+    }
+    if (!(await confirmDropFigures())) return;
     toast('Wird zugeschnitten …');
     const res = await crop(page.image, r);
     page = await db.updatePage(pageId, { ...res });
@@ -182,6 +278,7 @@ export async function openPageEditor(root, bookId, pageId) {
 
   render();
   const off = db.onChange(async (e) => {
+    if (e.type === 'figure' && e.bookId === bookId) { renderFigures(); return; }
     if (e.type === 'page' && e.id === pageId) {
       page = await db.getPage(pageId);
       if (page) render();
@@ -192,7 +289,7 @@ export async function openPageEditor(root, bookId, pageId) {
   });
 
   const onKey = (e) => {
-    if (e.target === text) return;
+    if (e.target.closest && e.target.closest('input, textarea')) return;
     if (e.key === 'ArrowLeft') step(-1);
     if (e.key === 'ArrowRight') step(1);
   };
@@ -203,5 +300,6 @@ export async function openPageEditor(root, bookId, pageId) {
     off();
     document.removeEventListener('keydown', onKey);
     pool.clear();
+    figPool.clear();
   };
 }
