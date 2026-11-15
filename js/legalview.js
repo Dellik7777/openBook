@@ -56,7 +56,7 @@ export async function openLegal(root) {
       h('h3', {}, 'Kamera'),
       h('p', {}, 'Die Kamera wird nur nach deiner Freigabe und nur zum Fotografieren von Seiten und zum Lesen von QR- und ISBN-Strichcodes genutzt. Bilder werden nicht übertragen (außer mit „Fotos mitsichern“ in deinen eigenen Cloud-Speicher).'),
       h('h3', {}, 'ISBN nachschlagen (optional)'),
-      h('p', {}, 'Wenn du beim Anlegen eines Buchs „ISBN scannen“ bzw. „Nachschlagen“ nutzt, wird ausschließlich die ISBN an Open Library (Internet Archive, USA) und, falls dort nichts gefunden wird, an Google Books (Google Ireland Ltd.) gesendet, um Titel, Autor und Cover abzurufen. Dabei sehen diese Anbieter technisch bedingt deine IP-Adresse. Der Strichcode selbst wird auf dem Gerät gelesen.'),
+      h('p', {}, 'Wenn du beim Anlegen eines Buchs „ISBN scannen“ bzw. „Nachschlagen“ nutzt, wird ausschließlich die ISBN an Open Library (Internet Archive, USA), die Deutsche Nationalbibliothek, lobid (Hochschulbibliothekszentrum NRW) und Google Books (Google Ireland Ltd.) gesendet, um Titel, Autor und Cover abzurufen. Dabei sehen diese Anbieter technisch bedingt deine IP-Adresse. Der Strichcode selbst wird auf dem Gerät gelesen.'),
       h('h3', {}, 'Vorlesen'),
       h('p', {}, 'Die Vorlesefunktion nutzt die Sprachausgabe deines Geräts bzw. Browsers. Lesepixel wählt bevorzugt Stimmen, die auf dem Gerät laufen. Sind nur Online-Stimmen verfügbar (z. B. in manchen Browsern am Computer), überträgt der Browser den vorgelesenen Text an dessen Anbieter.'),
       h('h3', {}, 'App-Sperre'),

@@ -73,6 +73,13 @@ export function scanIsbn() {
               c.height = Math.round(vh * scale);
               ctx.drawImage(video, 0, 0, c.width, c.height);
               code = decodeEan13(grayFromCanvas(ctx, c.width, c.height), c.width, c.height);
+              if (!code) {
+                // Mittelteil in voller Auflösung (Strichcode klein im Bild / Buch weiter weg)
+                const cw = Math.min(vw, 1280), ch = Math.min(vh, Math.round(cw * 0.6));
+                c.width = cw; c.height = ch;
+                ctx.drawImage(video, (vw - cw) / 2, (vh - ch) / 2, cw, ch, 0, 0, cw, ch);
+                code = decodeEan13(grayFromCanvas(ctx, cw, ch), cw, ch);
+              }
               if (code && !isIsbn(code)) { info.textContent = 'Das ist kein ISBN-Strichcode (vielleicht der Preis-Code daneben?).'; code = null; }
             }
             // zweimal hintereinander dasselbe gelesen → sicher
@@ -103,50 +110,77 @@ async function imageBlob(url) {
   } catch (e) { return null; }
 }
 
+const join = (t, sub) => (sub && t.length < 40 && !t.includes(sub) ? `${t}. ${sub}` : t);
+const isbn10of = (i13) => {
+  if (!/^978\d{10}$/.test(i13)) return null;
+  const b = i13.slice(3, 12);
+  let s = 0;
+  for (let i = 0; i < 9; i++) s += +b[i] * (10 - i);
+  const c = (11 - (s % 11)) % 11;
+  return b + (c === 10 ? 'X' : String(c));
+};
+
+// Quellen (alle parallel abgefragt; die erste mit Treffer in dieser Reihenfolge gewinnt)
+const SOURCES = [
+  ['Open Library', async (isbn) => {
+    const res = await timeoutFetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`);
+    if (!res.ok) return null;
+    const d = (await res.json())[`ISBN:${isbn}`];
+    return d && d.title ? { title: join(d.title, d.subtitle), author: (d.authors || []).map((a) => a.name).join(', '), coverUrl: d.cover ? d.cover.large || d.cover.medium : null } : null;
+  }],
+  ['Deutsche Nationalbibliothek', async (isbn) => {
+    const res = await timeoutFetch(`https://services.dnb.de/sru/dnb?version=1.1&operation=searchRetrieve&query=num%3D${isbn}&recordSchema=oai_dc&maximumRecords=1`);
+    if (!res.ok) return null;
+    const xml = new DOMParser().parseFromString(await res.text(), 'application/xml');
+    const get = (tag) => [...xml.getElementsByTagName('*')].filter((e) => e.localName === tag).map((e) => e.textContent.trim());
+    const title = (get('title')[0] || '').split(' / ')[0].replace(/\s*:\s*/, '. ').trim();
+    if (!title) return null;
+    const author = get('creator').map((c) => c.replace(/\s*\[.*?\]\s*/g, '').replace(/^([^,]+),\s*(.+)$/, '$2 $1').trim()).filter(Boolean).join(', ');
+    return { title, author, coverUrl: `https://portal.dnb.de/opac/mvb/cover?isbn=${isbn}` };
+  }],
+  ['lobid (hbz)', async (isbn) => {
+    const res = await timeoutFetch(`https://lobid.org/resources/search?q=isbn:${isbn}&format=json&size=1`);
+    if (!res.ok) return null;
+    const m = ((await res.json()).member || [])[0];
+    if (!m || !m.title) return null;
+    const author = (m.contribution || []).map((c) => c.agent && c.agent.label).filter(Boolean).map((n) => n.replace(/^([^,]+),\s*(.+)$/, '$2 $1')).join(', ');
+    return { title: join(m.title, m.otherTitleInformation && m.otherTitleInformation[0]), author, coverUrl: null };
+  }],
+  ['Google Books', async (isbn) => {
+    const res = await timeoutFetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&country=DE`);
+    if (!res.ok) return null;
+    const v = ((await res.json()).items || [])[0];
+    const vi = v && v.volumeInfo;
+    if (!vi || !vi.title) return null;
+    const img = vi.imageLinks && (vi.imageLinks.thumbnail || vi.imageLinks.smallThumbnail);
+    return { title: join(vi.title, vi.subtitle), author: (vi.authors || []).join(', '), coverUrl: img ? img.replace(/^http:/, 'https:').replace('&edge=curl', '') : null };
+  }],
+  ['Open Library', async (isbn) => {
+    const res = await timeoutFetch(`https://openlibrary.org/search.json?isbn=${isbn}&fields=title,subtitle,author_name,cover_i&limit=1`);
+    if (!res.ok) return null;
+    const d = ((await res.json()).docs || [])[0];
+    return d && d.title ? { title: join(d.title, d.subtitle), author: (d.author_name || []).join(', '), coverUrl: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg` : null } : null;
+  }],
+];
+
 // → { isbn, title, author, cover (Blob|null), source } oder null
 export async function lookupIsbn(isbn) {
   if (!navigator.onLine) throw new Error('Keine Internetverbindung');
-  let found = null;
-  try {
-    const res = await timeoutFetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`);
-    if (res.ok) {
-      const j = await res.json();
-      const d = j[`ISBN:${isbn}`];
-      if (d && d.title) {
-        found = {
-          isbn, source: 'Open Library',
-          title: d.subtitle && d.title.length < 40 ? `${d.title}. ${d.subtitle}` : d.title,
-          author: (d.authors || []).map((a) => a.name).join(', '),
-          coverUrl: d.cover ? d.cover.large || d.cover.medium : null,
-        };
-      }
-    }
-  } catch (e) { console.warn('Open Library', e); }
-  if (!found) {
-    try {
-      const res = await timeoutFetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
-      if (res.ok) {
-        const j = await res.json();
-        const v = j.items && j.items[0] && j.items[0].volumeInfo;
-        if (v && v.title) {
-          const img = v.imageLinks && (v.imageLinks.thumbnail || v.imageLinks.smallThumbnail);
-          found = {
-            isbn, source: 'Google Books',
-            title: v.subtitle && v.title.length < 40 ? `${v.title}. ${v.subtitle}` : v.title,
-            author: (v.authors || []).join(', '),
-            coverUrl: img ? img.replace(/^http:/, 'https:').replace('&edge=curl', '') : null,
-          };
-        }
-      }
-    } catch (e) { console.warn('Google Books', e); }
-  }
-  if (!found) return null;
-  found.cover = found.coverUrl ? await imageBlob(found.coverUrl) : null;
-  if (!found.cover) found.cover = await imageBlob(`https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg?default=false`);
+  const results = await Promise.all(SOURCES.map(([name, fn]) => fn(isbn).then((r) => (r ? { ...r, source: name } : null)).catch((e) => { console.warn(name, e); return null; })));
+  const hits = results.filter(Boolean);
+  if (!hits.length) return null;
+  const found = { isbn, ...hits[0] };
+  if (!found.author) found.author = (hits.find((x) => x.author) || {}).author || '';
+  // Cover: erste Quelle, deren Bild sich laden lässt
+  found.cover = null;
+  const urls = [...hits.map((x) => x.coverUrl).filter(Boolean), `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg?default=false`];
+  const i10 = isbn10of(isbn);
+  if (i10) urls.push(`https://covers.openlibrary.org/b/isbn/${i10}-L.jpg?default=false`);
+  for (const u of [...new Set(urls)]) { found.cover = await imageBlob(u); if (found.cover) break; }
   return found;
 }
 
 // Kleiner Hinweis für den Dialog
 export function privacyNote() {
-  return h('p', { class: 'muted small' }, icon('search'), ' Zum Nachschlagen wird nur die ISBN an Open Library (Internet Archive) bzw. Google Books gesendet.');
+  return h('p', { class: 'muted small' }, icon('search'), ' Zum Nachschlagen wird nur die ISBN an Open Library, die Deutsche Nationalbibliothek, lobid (hbz) und Google Books gesendet.');
 }

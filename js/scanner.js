@@ -26,6 +26,10 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
   const scanFilter = localStorage.getItem('ob.scanFilter') !== '0';
   const autoCrop = localStorage.getItem('ob.autoCrop') !== '0';
   let auto = false, autoState = 'settle', stillSince = 0, prevProbe = null, autoTimer = null;
+  let refProbe = null, diffs = [], blurSince = 0;
+  // „Ecken prüfen“: nach jedem Foto die erkannten Ecken zeigen und frei einstellen lassen
+  let checkCorners = localStorage.getItem('ob.checkCorners') === '1';
+  let editing = false;
   const captures = []; // je Aufnahme ein Array von pageIds (Doppelseite = 2)
   const capturedCount = () => captures.reduce((n, c) => n + c.length, 0);
   let processing = Promise.resolve();
@@ -53,6 +57,12 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
 
   const figBtn = h('button', { class: 'chip', onClick: () => setFigureMode(!figureMode) }, icon('figure'), 'Abbildung');
   const autoBtn = h('button', { class: 'chip', onClick: () => setAuto(!auto) }, icon('play'), 'Auto');
+  const cornersBtn = h('button', { class: 'chip' + (checkCorners ? ' on' : ''), onClick: () => {
+    checkCorners = !checkCorners;
+    localStorage.setItem('ob.checkCorners', checkCorners ? '1' : '0');
+    cornersBtn.classList.toggle('on', checkCorners);
+    toast(checkCorners ? 'Ecken prüfen: nach jedem Foto kannst du den Ausschnitt einstellen' : 'Ecken werden automatisch erkannt');
+  } }, icon('crop'), 'Ecken');
   const autoInfo = h('div', { class: 'scan-auto', hidden: true }, h('span', { class: 'scan-auto-text' }), h('span', { class: 'scan-auto-bar' }, h('span', {})));
   function setFigureMode(on) {
     figureMode = on;
@@ -78,7 +88,7 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
     h('header', { class: 'scan-top' },
       iconButton('close', 'Scanner schließen', () => finish()),
       h('div', { class: 'scan-title' }, h('div', {}, book.title), counter),
-      h('div', { class: 'row gap-s wrap end scan-chips' }, torchBtn, autoBtn, figBtn, splitBtn),
+      h('div', { class: 'row gap-s wrap end scan-chips' }, torchBtn, autoBtn, cornersBtn, figBtn, splitBtn),
     ),
     insertBar,
     notice,
@@ -163,19 +173,41 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
     counter.textContent = `${total} ${total === 1 ? 'Seite' : 'Seiten'}` + (added ? ` · +${added} neu` : '') + (pendingCount ? ' · speichert …' : '');
   }
 
-  function capture({ fromAuto = false } = {}) {
+  function capture({ fromAuto = false, force = false } = {}) {
     if (!video.videoWidth) return false;
     const frame = grabFrame(video);
     // Qualitätscheck: unscharf oder zu dunkel?
     const q = quality(frame);
-    const problem = q.sharp < SHARP_MIN ? 'unscharf' : q.bright < DARK_MIN ? 'zu dunkel' : null;
-    if (problem && fromAuto) return false; // Auto-Auslöser wartet auf ein besseres Bild
+    let problem = q.sharp < SHARP_MIN ? 'unscharf' : q.bright < DARK_MIN ? 'zu dunkel' : null;
+    if (problem && fromAuto && !force) return false; // Auto-Auslöser wartet kurz auf ein besseres Bild
+    if (problem && fromAuto) { toast(`Foto evtl. ${problem} – Seite ggf. im Editor prüfen`); problem = null; } // Auto nicht anhalten
     flashEl.classList.remove('go');
     void flashEl.offsetWidth;
     flashEl.classList.add('go');
     if (navigator.vibrate) navigator.vibrate(15);
+    if (checkCorners && !figureMode) { reviewCorners(frame, problem); return true; }
     enqueueProcessing(frame, problem);
     return true;
+  }
+
+  async function reviewCorners(frame, problem) {
+    editing = true;
+    try {
+      const { openCornerEditor } = await import('./corners.js');
+      const { detectPage } = await import('./pagedetect.js');
+      const detect = () => {
+        const d = detectPage(frame, { spread: split });
+        return d ? d.quad.map(([x, y]) => [x / frame.width, y / frame.height]) : null;
+      };
+      let q0 = null;
+      try { q0 = autoCrop ? detect() : null; } catch (e) { /* von Hand */ }
+      const quad = await openCornerEditor(frame, q0, { autoDetect: async () => detect(), title: split ? 'Ecken der Doppelseite' : 'Ecken der Seite', okLabel: 'Seite übernehmen' });
+      if (!quad) { toast('Foto verworfen'); return; }
+      enqueueProcessing(frame, problem, quad);
+    } finally {
+      editing = false;
+      prevProbe = null; stillSince = 0;
+    }
   }
 
   // ---------- Auto-Auslöser: nach dem Umblättern auslösen, sobald das Bild ruhig ist ----------
@@ -184,7 +216,7 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
     autoBtn.classList.toggle('on', on);
     autoInfo.hidden = !on;
     clearInterval(autoTimer);
-    prevProbe = null; stillSince = 0; autoState = 'settle';
+    prevProbe = null; refProbe = null; diffs = []; stillSince = 0; blurSince = 0; autoState = 'settle';
     if (on) {
       toast('Auto: Seite ruhig halten – nach dem Umblättern löst Lesepixel selbst aus');
       autoTimer = setInterval(autoTick, 150);
@@ -196,30 +228,43 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
     autoInfo.querySelector('.scan-auto-bar span').style.width = Math.round(progress * 100) + '%';
     autoInfo.classList.toggle('armed', autoState === 'armed');
   }
+  // Schwellen passen sich dem Grundrauschen an (Handy in der Hand zittert immer etwas)
+  function thresholds() {
+    const sorted = [...diffs].sort((a, b) => a - b);
+    const noise = sorted.length >= 6 ? sorted[Math.floor(sorted.length * 0.25)] : STILL / 2;
+    const still = Math.min(9, Math.max(STILL, noise * 1.8 + 0.8));
+    return { still, move: Math.max(MOVE, still * 2.5) };
+  }
   function autoTick() {
-    if (!auto || !video.videoWidth || !notice.hidden) return; // bei offenen Hinweisen pausieren
+    if (!auto || editing || !video.videoWidth || !notice.hidden) return; // bei offenen Hinweisen pausieren
     const { frame, diff } = motionProbe(video, prevProbe);
     prevProbe = frame;
+    if (Number.isFinite(diff)) { diffs.push(diff); if (diffs.length > 30) diffs.shift(); }
+    const thr = thresholds();
     if (autoState === 'armed') {
-      if (diff > MOVE) { autoState = 'moving'; stillSince = 0; }
+      // Umgeblättert? Bewegung zwischen zwei Bildern ODER deutlich anderes Bild als bei der letzten Aufnahme
+      const fromRef = refProbe ? motionProbe(video, refProbe).diff : 0;
+      if (diff > thr.move || fromRef > thr.move * 1.5) { autoState = 'moving'; stillSince = 0; }
       showAuto();
       return;
     }
-    if (diff < STILL) {
+    if (diff < thr.still) {
       if (!stillSince) stillSince = Date.now();
       const p = (Date.now() - stillSince) / STILL_MS;
       showAuto(Math.min(1, p));
       if (p >= 1) {
-        if (capture({ fromAuto: true })) { autoState = 'armed'; stillSince = 0; showAuto(); }
-        else stillSince = Date.now(); // unscharf → weiter warten
+        // Bei unscharfem Bild bis zu 2,5 s auf ein besseres warten, dann trotzdem auslösen
+        if (!blurSince) blurSince = Date.now();
+        const force = Date.now() - blurSince > 2500;
+        if (capture({ fromAuto: true, force })) { autoState = 'armed'; stillSince = 0; blurSince = 0; refProbe = frame; showAuto(); }
       }
     } else {
-      stillSince = 0;
+      stillSince = 0; blurSince = 0;
       showAuto();
     }
   }
 
-  function enqueueProcessing(src, problem = null) {
+  function enqueueProcessing(src, problem = null, quad = null) {
     pendingCount++;
     updateCounter();
     const asFigure = figureMode;
@@ -228,7 +273,7 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
     processing = processing.then(async () => {
       try {
         // Abbildungen in Farbe und ohne Scan-Filter
-        const parts = await processCapture(src, { split: doSplit, scanFilter: scanFilter && !asFigure, autoCrop });
+        const parts = await processCapture(src, { split: doSplit, scanFilter: scanFilter && !asFigure, autoCrop, quad });
         const group = [];
         captures.push(group);
         for (const part of parts) {

@@ -151,26 +151,28 @@ const SECRET = {
   figures: ['caption'],
   states: ['highlights', 'bookmarks'],
 };
-const BLOBS = { pages: ['image', 'thumb'], figures: ['image'], states: [] };
-const EMPTY = { text: null, lines: null, uncertain: null, caption: '', highlights: [], bookmarks: [], image: null, thumb: null };
-const BLOB_FIELD = { image: 'simg', thumb: 'sthumb' };
+const BLOBS = { pages: ['image', 'thumb', 'orig'], figures: ['image'], states: [] };
+const EMPTY = { text: null, lines: null, uncertain: null, caption: '', highlights: [], bookmarks: [], image: null, thumb: null, orig: null };
+const BLOB_FIELD = { image: 'simg', thumb: 'sthumb', orig: 'sorig' };
+const HAS = { image: 'hasImage', orig: 'hasOrig' };
+const LAZY = new Set(['image', 'orig']); // große Bilder: mit images:false nicht entschlüsseln
 
 // Klartext-Datensatz → gespeicherte Form (verschlüsselt, wenn das Buch verschlüsselt ist)
 async function seal(kind, rec, existing = null) {
   if (!rec || rec.enc || !(await isEncBook(rec.bookId))) {
-    if (rec && !rec.enc && (rec.sealed || rec.hasImage !== undefined)) { const r = { ...rec }; delete r.sealed; delete r.hasImage; return r; }
+    if (rec && !rec.enc && (rec.sealed || rec.hasImage !== undefined || rec.hasOrig !== undefined)) { const r = { ...rec }; delete r.sealed; delete r.hasImage; delete r.hasOrig; return r; }
     return rec;
   }
   if (!vault.isOpen()) throw new vault.LockedError();
   const out = { ...rec, enc: 1 };
-  delete out.sealed; delete out.hasImage;
+  delete out.sealed; delete out.hasImage; delete out.hasOrig;
   const secret = {};
   for (const k of SECRET[kind]) { secret[k] = rec[k] ?? EMPTY[k]; out[k] = EMPTY[k]; }
   out.sx = await vault.sealJson(secret);
   for (const k of BLOBS[kind]) {
     const f = BLOB_FIELD[k];
     if (rec[k]) out[f] = await vault.sealBlob(rec[k]);
-    else if (k === 'image' && rec.hasImage && existing && existing[f]) out[f] = existing[f]; // ohne Bild geladen → altes behalten
+    else if (HAS[k] && rec[HAS[k]] && existing && existing[f]) out[f] = existing[f]; // ohne Bild geladen → altes behalten
     else out[f] = null;
     out[k] = null;
   }
@@ -184,13 +186,13 @@ async function unseal(kind, rec, { images = true, raw = false } = {}) {
   delete out.enc; delete out.sx;
   for (const f of Object.values(BLOB_FIELD)) delete out[f];
   // hasImage nur, wenn das Foto nicht mitgeladen wird (dann bleibt es beim Zurückschreiben erhalten)
-  if (kind === 'pages' && (!images || !vault.isOpen())) out.hasImage = !!rec.simg;
+  if (kind === 'pages' && (!images || !vault.isOpen())) { out.hasImage = !!rec.simg; out.hasOrig = !!rec.sorig; }
   if (!vault.isOpen()) { out.sealed = true; return out; }
   try {
     Object.assign(out, await vault.openJson(rec.sx));
     for (const k of BLOBS[kind]) {
       const f = BLOB_FIELD[k];
-      out[k] = rec[f] && (images || k !== 'image' || kind !== 'pages') ? await vault.openBlob(rec[f]) : null;
+      out[k] = rec[f] && (images || !LAZY.has(k) || kind !== 'pages') ? await vault.openBlob(rec[f]) : null;
     }
   } catch (e) {
     console.warn('Entschlüsseln fehlgeschlagen', e);
@@ -409,7 +411,7 @@ export async function addPage(bookId, { image, thumb, ...extra }, atIndex = null
 }
 
 export async function putPage(page, { silent = false } = {}) {
-  const existing = page.hasImage && !page.image ? await getOne('pages', page.id) : null;
+  const existing = (page.hasImage && !page.image) || (page.hasOrig && !page.orig) ? await getOne('pages', page.id) : null;
   const rec = await seal('pages', page, existing);
   await tx(['pages'], 'readwrite', (t) => t.objectStore('pages').put(rec));
   if (!silent) emit('page', page.id, page.bookId);

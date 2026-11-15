@@ -10,18 +10,21 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 
 **Scannen**
 - Kamera-Scanner für viele Seiten am Stück: Antippen oder Auslöser drücken, nächste Seite, fertig
-- **Doppelseiten-Modus**: ein Foto vom aufgeschlagenen Buch wird automatisch in linke und rechte Seite geteilt
+- **Doppelseiten-Modus**: ein Foto vom aufgeschlagenen Buch wird am Bundsteg (Buchmitte) in linke und rechte Seite geteilt
+- **Ecken frei einstellen**: im Seiten-Editor („Ecken anpassen“) oder direkt nach jedem Foto (Schalter „Ecken“ im Scanner), mit Lupe
 - Scan-Filter (Graustufen, helles Papier), Taschenlampe, „Zurück“ für die letzte Aufnahme
 - Import vorhandener Fotos aus der Galerie
 - **Seiten gerade rücken:** Lesepixel findet die Seite im Foto, schneidet den Tisch ab, entzerrt schräge Aufnahmen und gleicht die Wölbung zur Buchmitte aus (mit Sicherheitsprüfung, damit kein Text abgeschnitten wird)
-- **Auto-Auslöser:** umblättern, still halten, die App fotografiert selbst
+- **Auto-Auslöser:** umblättern, still halten, die App fotografiert selbst (passt sich an das Zittern der Hand an)
 - **Qualitätscheck** direkt nach dem Foto (unscharf, zu dunkel) mit „Nochmal“
 - **Seitenprüfung:** Lesepixel liest die gedruckten Seitenzahlen mit und meldet sofort, wenn eine Seite fehlt, doppelt ist oder in falscher Reihenfolge liegt. Mit „Nachscannen“ wird die fehlende Seite an der richtigen Stelle eingefügt, mit „Passt so“ wird der Hinweis ausgeblendet
 - **Abbildungs-Modus:** Karten, Bilder und Diagramme in Farbe als ganze Seite fotografieren
 - **Galerie-Fotos nach Seitenzahl ordnen:** durcheinander importierte Seiten mit einem Tipp in die richtige Reihenfolge bringen (mit „Rückgängig“)
 
 **Texterkennung (OCR)**
-- Tesseract läuft komplett im Browser (Deutsch + Englisch), auch offline
+- Tesseract läuft komplett im Browser, auch offline; Standard ist **Deutsch** (zuverlässigste Umlaute), wahlweise Deutsch + Englisch oder Englisch
+- **Gewölbte Zeilen werden gerade gezogen**, bevor der Text erkannt wird (sonst hält die Erkennung gebogene Zeilen für zwei Spalten)
+- **Initialen** (großer Anfangsbuchstabe am Kapitelanfang) werden erkannt und vor das Wort gesetzt
 - Läuft im Hintergrund weiter, während du scannst; wird nach einem Neustart fortgesetzt
 - Repariert Silbentrennung am Zeilenende, entfernt Seitenzahlen und Kolumnentitel und verbindet Absätze über Seitengrenzen
 - **Erhält die Formatierung:** Überschriften, Aufzählungen mit Ebenen, nummerierte Listen, **fett** und *kursiv* (eigene Bildanalyse von Strichstärke und Schräglage)
@@ -65,7 +68,7 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 
 **Verwalten**
 - Bibliothek mit Covern (Foto oder automatisch erzeugt) und Lesefortschritt
-- **Buch per ISBN anlegen:** Strichcode scannen (eigener Leser, klappt auch in Safari), Titel, Autor und Cover werden nachgeschlagen
+- **Buch per ISBN anlegen:** Strichcode scannen (eigener Leser, klappt auch in Safari), Titel, Autor und Cover werden bei Open Library, der Deutschen Nationalbibliothek, lobid (hbz) und Google Books nachgeschlagen
 - **PDF und EPUB importieren:** PDFs mit Textebene ohne Texterkennung, gescannte PDFs werden erkannt; EPUBs mit Kapiteln, Bildern, Tabellen und Fußnoten (ohne DRM)
 - **Lesestatus** „Will ich lesen“, „Lese ich“, „Gelesen“ mit Filter – „Gelesen“ automatisch am Buchende
 - **Ordner** (auch verschachtelt) und **Tags**, Filter nach Tag
@@ -160,6 +163,8 @@ js/vault.js           Verschlüsselung gesperrter Bücher (Tresor)
 js/cards.js, cardsview.js  Lernkarten
 js/lookup.js          Wort nachschlagen
 js/zoom.js            Zoomen mit zwei Fingern
+js/dewarp.js          Gewölbte Textzeilen gerade ziehen, Initialen finden
+js/corners.js         Ecken einer Seite frei einstellen
 js/legal.js           Angaben zum Anbieter (Impressum/Datenschutz)
 js/legalview.js       Seite „Rechtliches“
 vendor/               Tesseract, Sprachdaten, JSZip, QR-Codes, Literata, Montserrat (siehe vendor/README.md)

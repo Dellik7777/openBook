@@ -59,8 +59,10 @@ function otsu(g) {
   return thr;
 }
 
-// Größte zusammenhängende helle Fläche (Papier) als Maske
-function paperMask(gray) {
+// Größte zusammenhängende helle Fläche (Papier) als Maske.
+// spread: bei Doppelseiten auch die zweite Seite dazunehmen, wenn sie gleich groß daneben liegt
+// (der dunkle Bundsteg trennt die beiden Seiten oft in zwei Flächen)
+function paperMask(gray, { spread = false } = {}) {
   const { w, h } = gray;
   const b = boxBlur(gray.g, w, h, 2);
   const t = otsu(b);
@@ -71,6 +73,7 @@ function paperMask(gray) {
   for (let i = 0; i < mask.length; i++) mask[i] = closed[i] > 110 ? 1 : 0;
   const label = new Int32Array(w * h).fill(-1);
   let bestId = -1, bestArea = 0, id = 0;
+  const areas = [];
   const stack = new Int32Array(w * h);
   for (let i = 0; i < mask.length; i++) {
     if (!mask[i] || label[i] >= 0) continue;
@@ -84,12 +87,26 @@ function paperMask(gray) {
       if (y > 0 && mask[p - w] && label[p - w] < 0) { label[p - w] = id; stack[sp++] = p - w; }
       if (y < h - 1 && mask[p + w] && label[p + w] < 0) { label[p + w] = id; stack[sp++] = p + w; }
     }
+    areas.push(area);
     if (area > bestArea) { bestArea = area; bestId = id; }
     id++;
   }
+  let secondId = -1;
+  if (spread && areas.length > 1) {
+    // zweitgrößte Fläche, wenn sie ähnlich groß ist und seitlich daneben liegt
+    let s2 = -1, a2 = 0;
+    areas.forEach((a, k) => { if (k !== bestId && a > a2) { a2 = a; s2 = k; } });
+    if (s2 >= 0 && a2 > bestArea * 0.4) {
+      const bb = (lid) => { let x0 = w, x1 = 0, y0 = h, y1 = 0; for (let i = 0; i < label.length; i++) if (label[i] === lid) { const x = i % w, y = (i / w) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } return { x0, x1, y0, y1 }; };
+      const A = bb(bestId), B = bb(s2);
+      const vov = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
+      const side = B.x0 > A.x1 - w * 0.05 || B.x1 < A.x0 + w * 0.05;
+      if (side && vov > Math.min(A.y1 - A.y0, B.y1 - B.y0) * 0.6) secondId = s2;
+    }
+  }
   const out = new Uint8Array(w * h);
-  for (let i = 0; i < out.length; i++) out[i] = label[i] === bestId ? 1 : 0;
-  return { mask: out, area: bestArea };
+  for (let i = 0; i < out.length; i++) out[i] = label[i] === bestId || (secondId >= 0 && label[i] === secondId) ? 1 : 0;
+  return { mask: out, area: bestArea + (secondId >= 0 ? areas[secondId] : 0) };
 }
 
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -110,10 +127,10 @@ function convex(q) {
 }
 
 // → { quad: [[x,y] TL, TR, BR, BL] in Originalkoordinaten } oder null (Seite füllt das Bild / nicht sicher erkannt)
-export function detectPage(src) {
+export function detectPage(src, { spread = false } = {}) {
   const gray = grayOf(src, 420, true);
   const { w, h } = gray;
-  const { mask, area } = paperMask(gray);
+  const { mask, area } = paperMask(gray, { spread });
   const ratio = area / (w * h);
   if (ratio < 0.15) return null;
   let tl, tr, br, bl, mTL = Infinity, mTR = -Infinity, mBR = -Infinity, mBL = Infinity;
@@ -336,4 +353,53 @@ export function motionProbe(video, prev) {
   let d = 0;
   for (let i = 0; i < g.length; i++) d += Math.abs(g[i] - prev[i]);
   return { frame: g, diff: d / g.length };
+}
+
+// Bundsteg einer Doppelseite finden: im mittleren Bereich die Stelle ohne Schrift
+// (Innenränder beider Seiten), dort die dunkelste Spalte (Schatten der Bindung).
+// → x in Pixeln des Bilds
+export function findGutter(src) {
+  const { g, w, h, scale } = grayOf(src, 700);
+  const x0 = Math.round(w * 0.3), x1 = Math.round(w * 0.7);
+  const edge = new Float32Array(w), mean = new Float32Array(w);
+  const yA = Math.round(h * 0.08), yB = Math.round(h * 0.92);
+  for (let x = Math.max(1, x0 - 10); x < Math.min(w - 1, x1 + 10); x++) {
+    let e = 0, m = 0;
+    for (let y = yA; y < yB; y++) {
+      const i = y * w + x;
+      if (Math.abs(g[i + 1] - g[i - 1]) > 40) e++;
+      m += g[i];
+    }
+    edge[x] = e / (yB - yA);
+    mean[x] = m / (yB - yA);
+  }
+  // geglättet
+  const sm = (arr, r) => { const o = new Float32Array(w); for (let x = x0; x < x1; x++) { let s = 0, n = 0; for (let k = -r; k <= r; k++) { s += arr[x + k] || 0; n++; } o[x] = s / n; } return o; };
+  const e2 = sm(edge, 3), m2 = sm(mean, 2);
+  const band = [];
+  for (let x = x0; x < x1; x++) band.push(e2[x]);
+  const sorted = [...band].sort((a, b) => a - b);
+  const thr = Math.max(0.004, sorted[Math.floor(sorted.length * 0.5)] * 0.35);
+  // Läufe ohne Schrift, der Mitte am nächsten
+  let best = null;
+  for (let x = x0; x < x1;) {
+    if (e2[x] > thr) { x++; continue; }
+    let e = x;
+    while (e < x1 && e2[e] <= thr) e++;
+    const len = e - x, c = (x + e) / 2;
+    if (len >= Math.max(3, w * 0.008)) {
+      const score = Math.abs(c - w / 2) - len * 0.5;
+      if (!best || score < best.score) best = { a: x, b: e, score };
+    }
+    x = e;
+  }
+  let gx = Math.round(w / 2);
+  if (best) {
+    gx = best.a;
+    let lo = Infinity, hi = -Infinity;
+    for (let x = best.a; x < best.b; x++) { if (m2[x] < m2[gx]) gx = x; lo = Math.min(lo, m2[x]); hi = Math.max(hi, m2[x]); }
+    // kein erkennbarer Schatten (flach aufliegendes Buch): Mitte des schriftfreien Bereichs
+    if (hi - lo < 6) gx = Math.round((best.a + best.b) / 2);
+  }
+  return Math.round(gx / scale);
 }
