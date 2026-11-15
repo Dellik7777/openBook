@@ -2,6 +2,7 @@
 
 import * as db from './db.js';
 import { loadJSZip } from './zip.js';
+import * as profiles from './profiles.js';
 
 const FORMAT = 'openbook-backup';
 
@@ -9,7 +10,8 @@ export async function exportBackup(bookIds = null) {
   const JSZip = await loadJSZip();
   const zip = new JSZip();
   const books = (await db.getBooks()).filter((b) => !bookIds || bookIds.includes(b.id));
-  const meta = { format: FORMAT, version: 1, exportedAt: new Date().toISOString(), books: [] };
+  const meta = { format: FORMAT, version: 2, exportedAt: new Date().toISOString(), books: [] };
+  const allStates = await db.getAllStates();
   for (const b of books) {
     const pages = await db.getPagesMeta(b.id);
     const { cover, ...rest } = b;
@@ -17,10 +19,11 @@ export async function exportBackup(bookIds = null) {
     meta.books.push({
       ...rest,
       hasCover: !!cover,
+      states: allStates.filter((s) => s.bookId === b.id),
       pages: pages.map((p) => {
-        zip.file(`books/${b.id}/pages/${p.id}.jpg`, p.image);
-        zip.file(`books/${b.id}/thumbs/${p.id}.jpg`, p.thumb);
-        return { id: p.id, text: p.text, ocrStatus: p.ocrStatus === 'done' ? 'done' : 'pending', confidence: p.confidence, createdAt: p.createdAt };
+        if (p.image) zip.file(`books/${b.id}/pages/${p.id}.jpg`, p.image);
+        if (p.thumb) zip.file(`books/${b.id}/thumbs/${p.id}.jpg`, p.thumb);
+        return { id: p.id, text: p.text, ocrStatus: p.ocrStatus === 'done' ? 'done' : 'pending', confidence: p.confidence, createdAt: p.createdAt, hasImage: !!p.image };
       }),
     });
   }
@@ -46,29 +49,41 @@ export async function importBackup(file) {
     for (const mp of mb.pages) {
       const image = await blobOf(zip, `books/${mb.id}/pages/${mp.id}.jpg`);
       const thumb = (await blobOf(zip, `books/${mb.id}/thumbs/${mp.id}.jpg`)) || image;
-      if (!image) continue;
+      if (!image && !mp.text) continue;
       const pid = existing.has(mb.id) ? db.uid() : mp.id;
       await db.putPage({
         id: pid, bookId: id, image, thumb,
         text: mp.text ?? null,
-        ocrStatus: mp.ocrStatus === 'done' ? 'done' : 'pending',
+        ocrStatus: mp.ocrStatus === 'done' || !image ? 'done' : 'pending',
         confidence: mp.confidence ?? null,
         createdAt: mp.createdAt || Date.now(),
+        updatedAt: Date.now(),
       });
       pageIds.push(pid);
     }
-    const { pages, hasCover, ...rest } = mb;
-    void pages; void hasCover;
     const copy = existing.has(mb.id);
-    await db.putBook({
-      ...rest,
+    const now = Date.now();
+    await db.putBookRaw({
       id,
       title: copy ? `${mb.title} (Kopie)` : mb.title,
+      author: mb.author || '',
       cover,
+      coverId: cover ? db.uid() : null,
       pageOrder: pageIds,
-      position: copy ? null : mb.position,
-      bookmarks: copy ? [] : (mb.bookmarks || []),
+      createdAt: mb.createdAt || now,
+      updatedAt: now,
+      metaAt: now,
+      orderAt: now,
     });
+    // Lesestände (Format v2) bzw. alte Leseposition (Format v1) übernehmen
+    const profileId = profiles.currentId();
+    if (!copy && Array.isArray(mb.states)) {
+      for (const st of mb.states) {
+        if (await db.getProfile(st.profileId)) await db.putStateRaw({ ...st, key: db.stateKey(st.profileId, id), bookId: id, updatedAt: now });
+      }
+    } else if (!copy && profileId && (mb.position || (mb.bookmarks || []).length)) {
+      await db.updateState(profileId, id, { position: mb.position || null, bookmarks: mb.bookmarks || [] });
+    }
     n++;
   }
   return n;

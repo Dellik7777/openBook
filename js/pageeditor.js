@@ -21,13 +21,21 @@ export async function openPageEditor(root, bookId, pageId) {
     h('button', { class: 'btn small', onClick: () => endCrop(false) }, 'Abbrechen'),
     h('button', { class: 'btn small primary', onClick: () => endCrop(true) }, icon('check'), 'Zuschneiden'),
   );
-  const tools = h('div', { class: 'row gap-s wrap' },
+  const noImage = h('div', { class: 'pe-noimage', hidden: true },
+    h('p', {}, 'Kein Foto auf diesem Gerät'),
+    h('p', { class: 'muted small' }, 'Diese Seite wurde auf einem anderen Gerät gescannt. Synchronisiert wird nur der Text; das Foto bleibt dort.'),
+  );
+  const imgTools = [
     h('button', { class: 'btn small', onClick: () => doRotate(-90) }, icon('rotate', 'flip'), 'Links'),
     h('button', { class: 'btn small', onClick: () => doRotate(90) }, icon('rotate'), 'Rechts'),
     h('button', { class: 'btn small', onClick: () => startCrop() }, icon('crop'), 'Zuschneiden'),
+  ];
+  const rerunBtn = h('button', { class: 'btn small', onClick: () => rerun() }, icon('refresh'), 'Neu erkennen');
+  const tools = h('div', { class: 'row gap-s wrap' },
+    ...imgTools,
     h('button', { class: 'btn small', onClick: () => move(-1) }, icon('left'), 'Nach vorn'),
     h('button', { class: 'btn small', onClick: () => move(1) }, 'Nach hinten', icon('right')),
-    h('button', { class: 'btn small', onClick: () => rerun() }, icon('refresh'), 'Neu erkennen'),
+    rerunBtn,
     h('button', { class: 'btn small danger', onClick: () => remove() }, icon('trash'), 'Löschen'),
   );
   const prevBtn = iconButton('left', 'Vorherige Seite', () => step(-1));
@@ -39,7 +47,7 @@ export async function openPageEditor(root, bookId, pageId) {
       title, prevBtn, nextBtn,
     ),
     h('div', { class: 'pe-layout' },
-      h('div', { class: 'pe-left' }, imgWrap, cropBtns, tools),
+      h('div', { class: 'pe-left' }, imgWrap, noImage, cropBtns, tools),
       h('div', { class: 'pe-right' },
         h('div', { class: 'row between' }, h('strong', {}, 'Erkannter Text'), status),
         h('p', { class: 'muted small' }, 'Absätze mit einer Leerzeile trennen. Änderungen werden automatisch gespeichert.'),
@@ -55,16 +63,21 @@ export async function openPageEditor(root, bookId, pageId) {
     prevBtn.disabled = idx <= 0;
     nextBtn.disabled = idx >= book.pageOrder.length - 1;
     pool.clear();
-    img.src = pool.get(page.image);
+    const hasImg = !!page.image;
+    imgWrap.hidden = !hasImg;
+    noImage.hidden = hasImg;
+    for (const b of [...imgTools, rerunBtn]) b.hidden = !hasImg;
+    if (hasImg) img.src = pool.get(page.image);
     if (document.activeElement !== text) text.value = page.text || '';
     const st = {
       pending: 'Wartet auf Erkennung',
       running: 'Text wird erkannt …',
+      remote: 'Wird auf dem anderen Gerät erkannt',
       done: page.confidence != null ? `Erkannt · Sicherheit ${page.confidence} %` : 'Erkannt',
       error: 'Erkennung fehlgeschlagen',
     }[page.ocrStatus];
     status.textContent = st || '';
-    text.disabled = page.ocrStatus === 'running' || page.ocrStatus === 'pending';
+    text.disabled = ['running', 'pending', 'remote'].includes(page.ocrStatus);
   }
 
   let saveTimer = null;

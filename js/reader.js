@@ -2,6 +2,7 @@
 // Schrift/Thema einstellbar, Lesezeichen, Suche, Originalseiten-Ansicht.
 
 import * as db from './db.js';
+import * as profiles from './profiles.js';
 import { h, icon, iconButton, toast, sheet, UrlPool } from './ui.js';
 import { buildFlow } from './textproc.js';
 
@@ -20,17 +21,23 @@ const FONTS = {
 const THEMES = { white: 'Weiß', paper: 'Papier', sepia: 'Sepia', dark: 'Dunkel', black: 'Schwarz' };
 const MARGINS = { s: 16, m: 28, l: 48 };
 
-function loadSettings() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('ob.reader') || '{}') }; } catch (e) { return { ...DEFAULTS }; }
-}
-function saveSettings(s) { try { localStorage.setItem('ob.reader', JSON.stringify(s)); } catch (e) { /* ignorieren */ } }
+// Leseeinstellungen gehören zum aktiven Profil (und werden mit ihm synchronisiert)
+function loadSettings() { return { ...DEFAULTS, ...profiles.getSettings() }; }
+function saveSettings(s) { profiles.saveSettings(s); }
 
 export async function openReader(root, bookId) {
   let book = await db.getBook(bookId);
   if (!book) { location.hash = '#/'; return; }
   let pages = await db.getPagesMeta(bookId);
   if (!pages.length) { location.hash = `#/book/${bookId}`; return; }
-  db.updateBook(bookId, { lastOpenedAt: Date.now() });
+  const profileId = profiles.currentId();
+  let state = (await db.getState(profileId, bookId)) || { position: null, bookmarks: [] };
+  let lastSavedAt = state.updatedAt || 0;
+  // Nur echtes Blättern zählt als neue Leseposition – bloßes Öffnen (oder ein anderes
+  // Layout auf diesem Gerät) darf die Position eines anderen Geräts nicht überschreiben.
+  let userMoved = false;
+  const userNav = () => { userMoved = true; };
+  db.updateState(profileId, bookId, { lastOpenedAt: Date.now() }, { touch: false });
 
   const settings = loadSettings();
   const pool = new UrlPool();
@@ -38,7 +45,7 @@ export async function openReader(root, bookId) {
   let sectionIdx = -1, screen = 0, screens = 1, colW = 0, gap = 0;
   let imgIndex = 0;
   let menuOpen = false;
-  let pos = book.position || null; // { pageId, p, char, ratio }
+  let pos = state.position || null; // { pageId, p, char, ratio, pageIndex }
 
   // ---------- DOM ----------
   const content = h('div', { class: 'r-content', lang: 'de' });
@@ -200,7 +207,7 @@ export async function openReader(root, bookId) {
           const fi = +el.dataset.fi;
           let char = 0;
           // Absatz beginnt auf früherem Bildschirm → Zeichenposition am Spaltenanfang ermitteln
-          if (rects[0].left - base < x0 - 1) char = charAtPoint(el, r.left + 2, r.top + 2);
+          if (rects[0].left - base < x0 - 1) char = charAtColumn(el, x0);
           return { fi, char };
         }
       }
@@ -209,23 +216,26 @@ export async function openReader(root, bookId) {
     return lastEl ? { fi: +lastEl.dataset.fi, char: 0 } : { fi: 0, char: 0 };
   }
 
-  function charAtPoint(el, x, y) {
-    let node = null, offset = 0;
-    if (document.caretPositionFromPoint) {
-      const cp = document.caretPositionFromPoint(x, y);
-      if (cp) { node = cp.offsetNode; offset = cp.offset; }
-    } else if (document.caretRangeFromPoint) {
-      const r = document.caretRangeFromPoint(x, y);
-      if (r) { node = r.startContainer; offset = r.startOffset; }
+  // Erstes Zeichen des Absatzes, das in der Spalte ab x0 steht (binäre Suche über Zeichen-Rechtecke).
+  // Unabhängig von Menüs/Overlays, die über dem Text liegen könnten.
+  function charAtColumn(el, x0) {
+    const node = el.firstChild;
+    if (!node || node.nodeType !== 3 || !node.length) return 0;
+    const base = content.getBoundingClientRect().left;
+    const r = document.createRange();
+    const leftOf = (i) => {
+      r.setStart(node, i); r.setEnd(node, i + 1);
+      const rc = r.getClientRects()[0] || r.getBoundingClientRect();
+      return rc.left - base;
+    };
+    let lo = 0, hi = node.length - 1, ans = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (leftOf(mid) >= x0 - 1) { ans = mid; hi = mid - 1; } else lo = mid + 1;
     }
-    if (!node || !el.contains(node)) return 0;
-    let total = 0;
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      if (walker.currentNode === node) return total + offset;
-      total += walker.currentNode.length;
-    }
-    return 0;
+    // Leerzeichen am Spaltenanfang überspringen
+    while (ans < node.length - 1 && /\s/.test(node.data[ans])) ans++;
+    return ans;
   }
 
   function screenOfChar(fi, char) {
@@ -268,7 +278,9 @@ export async function openReader(root, bookId) {
     imgIndex = Math.max(0, Math.min(pages.length - 1, i));
     pool.clear();
     const p = pages[imgIndex];
-    imgView.replaceChildren(h('img', { src: pool.get(p.image), alt: `Seite ${imgIndex + 1}`, draggable: 'false' }));
+    imgView.replaceChildren(p.image
+      ? h('img', { src: pool.get(p.image), alt: `Seite ${imgIndex + 1}`, draggable: 'false' })
+      : h('div', { class: 'r-noimage' }, h('p', {}, `Seite ${imgIndex + 1}`), h('p', { class: 'muted small' }, 'Das Originalfoto liegt nur auf dem Gerät, mit dem die Seite gescannt wurde. Synchronisiert wird nur der Text.')));
     imgView.classList.toggle('zoomed', zoomed);
     imgView.scrollTo(0, 0);
     // Position so speichern, dass die Textansicht dieselbe Buchseite findet
@@ -285,6 +297,7 @@ export async function openReader(root, bookId) {
 
   // ---------- Navigation ----------
   function next() {
+    userNav();
     if (settings.mode === 'images') {
       if (imgIndex < pages.length - 1) renderImage(imgIndex + 1); else endOfBook();
       return;
@@ -294,6 +307,7 @@ export async function openReader(root, bookId) {
     else endOfBook();
   }
   function prev() {
+    userNav();
     if (settings.mode === 'images') { if (imgIndex > 0) renderImage(imgIndex - 1); return; }
     if (screen > 0) showScreen(screen - 1, true);
     else if (sectionIdx > 0) { renderSection(sectionIdx - 1); showScreen(screens - 1); }
@@ -307,7 +321,7 @@ export async function openReader(root, bookId) {
     if (!sliderDragging) slider.value = Math.round((pos?.ratio || 0) * 1000);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      if (pos) db.updateBook(bookId, { position: pos, lastOpenedAt: Date.now() });
+      if (pos && userMoved) { lastSavedAt = Date.now(); db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now() }); }
     }, 400);
   }
 
@@ -355,7 +369,7 @@ export async function openReader(root, bookId) {
     return [start, end];
   }
   function bookmarkHere() {
-    const bms = book.bookmarks || [];
+    const bms = state.bookmarks || [];
     if (settings.mode === 'images') return bms.find((b) => b.pageIndex === imgIndex && b.image);
     const r = currentRange();
     return bms.find((b) => !b.image && (() => { const g = globalOf(b); return g >= r[0] && g < r[1]; })());
@@ -367,7 +381,7 @@ export async function openReader(root, bookId) {
   }
   async function toggleBookmark() {
     const existing = bookmarkHere();
-    let bms = [...(book.bookmarks || [])];
+    let bms = [...(state.bookmarks || [])];
     if (existing) {
       bms = bms.filter((b) => b !== existing);
       toast('Lesezeichen entfernt');
@@ -378,7 +392,7 @@ export async function openReader(root, bookId) {
       bms.push({ ...pos, label: snippet, createdAt: Date.now(), image: settings.mode === 'images', pageIndex: pos.pageIndex });
       toast('Lesezeichen gesetzt');
     }
-    book = await db.updateBook(bookId, { bookmarks: bms });
+    state = await db.updateState(profileId, bookId, { bookmarks: bms });
     updateBookmarkState();
   }
 
@@ -391,7 +405,7 @@ export async function openReader(root, bookId) {
       tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.t === which));
       thumbPool.clear();
       if (which === 'bm') {
-        const bms = [...(book.bookmarks || [])].sort((a, b) => globalOf(a) - globalOf(b));
+        const bms = [...(state.bookmarks || [])].sort((a, b) => globalOf(a) - globalOf(b));
         list.replaceChildren(...(bms.length ? bms.map((b) => h('button', { class: 'menu-item multi', onClick: () => { s.close(); jumpTo(b); } },
           icon('bookmark'),
           h('span', {}, h('span', { class: 'small muted' }, `Seite ${(b.pageIndex ?? 0) + 1} · ${Math.round((b.ratio || 0) * 100)} %`), h('br'), b.label),
@@ -408,16 +422,18 @@ export async function openReader(root, bookId) {
       h('button', { 'data-t': 'pages', onClick: () => show('pages') }, 'Seiten'),
     );
     const s = sheet('Inhalt', h('div', { class: 'stack' }, tabs, list), { onClose: () => thumbPool.clear() });
-    show((book.bookmarks || []).length ? 'bm' : 'pages');
+    show((state.bookmarks || []).length ? 'bm' : 'pages');
   }
 
   function jumpTo(b) {
+    userNav();
     closeMenu();
     if (settings.mode === 'images') { renderImage(b.pageIndex ?? 0); return; }
     const fi = flowIndexFor(b);
     goToFlow(fi, flow[fi] && flow[fi].pageId === b.pageId && flow[fi].p === b.p ? b.char || 0 : 0);
   }
   function jumpToPage(i) {
+    userNav();
     closeMenu();
     if (settings.mode === 'images') { renderImage(i); return; }
     let fi = flow.findIndex((f) => f.pageIndex === i);
@@ -454,7 +470,7 @@ export async function openReader(root, bookId) {
         ...out.map(({ fi, char }) => {
           const txt = flow[fi].text;
           const a = Math.max(0, char - 50), b = Math.min(txt.length, char + q.length + 60);
-          return h('button', { class: 'menu-item multi', onClick: () => { s.close(); closeMenu(); goToFlow(fi, char); } },
+          return h('button', { class: 'menu-item multi', onClick: () => { s.close(); closeMenu(); userNav(); goToFlow(fi, char); } },
             h('span', {},
               h('span', { class: 'small muted' }, `Seite ${sourcePageAt(fi, char) + 1}`), h('br'),
               (a > 0 ? '…' : '') + txt.slice(a, char), h('mark', {}, txt.slice(char, char + q.length)), txt.slice(char + q.length, b) + (b < txt.length ? '…' : ''),
@@ -578,6 +594,7 @@ export async function openReader(root, bookId) {
     }
   });
   slider.addEventListener('change', () => {
+    userNav();
     const r = slider.value / 1000;
     sliderDragging = false;
     if (settings.mode === 'images') renderImage(Math.round(r * (pages.length - 1)));
@@ -618,6 +635,7 @@ export async function openReader(root, bookId) {
   viewport.addEventListener('pointercancel', () => { start = null; });
 
   function switchModeTo(mode, pi) {
+    userNav();
     if (settings.mode !== mode) {
       settings.mode = mode; saveSettings(settings); applySettings();
     }
@@ -646,22 +664,54 @@ export async function openReader(root, bookId) {
   const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(relayout, 150); };
   window.addEventListener('resize', onResize);
 
-  // Neue OCR-Ergebnisse einarbeiten, ohne die Leseposition zu verlieren
+  // Neue OCR-Ergebnisse und synchronisierte Änderungen einarbeiten, ohne die Leseposition zu verlieren
   let refreshTimer = null;
   const off = db.onChange((e) => {
-    if (e.bookId !== bookId) return;
-    if (e.type === 'book') return;
+    const isSync = e.type === 'sync';
+    if (!isSync && (e.bookId !== bookId || e.type === 'book' || e.type === 'state' || e.type === 'profile')) return;
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(async () => {
       const keep = pos;
-      pages = await db.getPagesMeta(bookId);
-      book = await db.getBook(bookId);
-      if (!pages.length) return;
-      rebuildFlow();
-      pos = keep;
-      restore();
-    }, 1200);
+      const newPages = await db.getPagesMeta(bookId);
+      book = (await db.getBook(bookId)) || book;
+      if (!newPages.length) return;
+      const textChanged = newPages.length !== pages.length || newPages.some((p, i) => p.id !== pages[i].id || p.text !== pages[i].text);
+      pages = newPages;
+      if (textChanged) {
+        rebuildFlow();
+        pos = keep;
+        if (settings.mode === 'images') renderImage(Math.min(imgIndex, pages.length - 1)); else restore();
+      }
+      if (isSync) checkRemotePosition();
+    }, isSync ? 50 : 1200);
   });
+
+  // Wurde auf einem anderen Gerät (gleiches Profil) weitergelesen? → anbieten, dorthin zu springen
+  const banner = h('div', { class: 'r-banner', hidden: true });
+  view.append(banner);
+  async function checkRemotePosition() {
+    const s = await db.getState(profileId, bookId);
+    if (!s) return;
+    state = s;
+    updateBookmarkState();
+    const rp = s.position;
+    if (!rp || (s.updatedAt || 0) <= lastSavedAt || !pos) return;
+    if (Math.abs((rp.ratio || 0) - (pos.ratio || 0)) < 0.005) return;
+    if (!userMoved) {
+      // Noch nicht geblättert → einfach zur neuesten Stelle springen
+      lastSavedAt = s.updatedAt;
+      pos = rp;
+      if (settings.mode === 'images') renderImage(rp.pageIndex ?? 0); else restore();
+      toast('Leseposition vom anderen Gerät übernommen');
+      return;
+    }
+    banner.replaceChildren(
+      h('span', {}, `Auf einem anderen Gerät bis Seite ${(rp.pageIndex ?? 0) + 1} (${Math.round((rp.ratio || 0) * 100)} %) gelesen.`),
+      h('button', { class: 'btn small primary', onClick: (ev) => { ev.stopPropagation(); banner.hidden = true; lastSavedAt = s.updatedAt; pos = rp; if (settings.mode === 'images') renderImage(rp.pageIndex ?? 0); else restore(); } }, 'Dorthin'),
+      h('button', { class: 'btn small', onClick: (ev) => { ev.stopPropagation(); banner.hidden = true; lastSavedAt = Date.now(); } }, 'Hierbleiben'),
+    );
+    banner.hidden = false;
+  }
 
   // Wakelock: Bildschirm beim Lesen nicht abschalten
   let wakeLock = null;
@@ -683,7 +733,7 @@ export async function openReader(root, bookId) {
 
   return () => {
     clearTimeout(saveTimer);
-    if (pos) db.updateBook(bookId, { position: pos, lastOpenedAt: Date.now() });
+    if (pos && userMoved) db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now() });
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('visibilitychange', onVis);
     window.removeEventListener('resize', onResize);

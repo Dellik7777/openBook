@@ -2,7 +2,7 @@
 
 **Deine eigenen Bücher abfotografieren und überall lesen, wie auf einem Kindle.**
 
-openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines Buchs, das dir gehört. Die App erkennt den Text direkt auf dem Gerät und macht daraus ein E-Book mit anpassbarer Schrift, Nachtmodus, Lesezeichen und Suche. Alles bleibt lokal auf deinem Gerät: keine Cloud, kein Konto, kein Upload.
+openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines Buchs, das dir gehört. Die App erkennt den Text direkt auf dem Gerät und macht daraus ein E-Book mit anpassbarer Schrift, Nachtmodus, Lesezeichen und Suche. Fotos und Texterkennung bleiben auf deinem Gerät. Optional werden Texte und Lesestände über **deinen eigenen** Google Drive oder OneDrive zwischen iPhone, iPad und Android abgeglichen.
 
 ## Funktionen
 
@@ -25,6 +25,11 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines B
 - Lesezeichen, Volltextsuche, Seitenübersicht, Schieberegler
 - Originalfoto-Ansicht mit Zoom, z. B. für Bilder, Tabellen oder Formeln
 - Leseposition wird gespeichert, der Bildschirm bleibt beim Lesen an
+
+**Leseprofile & Synchronisierung**
+- Mehrere **Leseprofile** (z. B. für die Familie): jedes mit eigener Leseposition, eigenen Lesezeichen und Schrifteinstellungen
+- **Sync über Google Drive oder OneDrive**: Texte, Profile, Lesepositionen, Lesezeichen und Cover auf allen Geräten, ohne eigenen Server (Fotos bleiben lokal). Einrichtung: siehe **[SYNC.md](SYNC.md)**
+- Auf einem anderen Gerät weitergelesen? openBook springt an die neueste Stelle
 
 **Verwalten**
 - Bibliothek mit Covern (Foto oder automatisch erzeugt) und Lesefortschritt
@@ -63,7 +68,7 @@ Es gibt keinen Build-Schritt und keine Abhängigkeiten. Alles liegt im Repositor
 
 ## Daten & Speicher
 
-Bücher liegen in der IndexedDB des Browsers. Eine Seite braucht etwa 200 bis 400 KB, ein Buch mit 300 Seiten also ungefähr 60 bis 120 MB. openBook fragt nach dauerhaftem Speicher. Trotzdem gilt: **regelmäßig eine Sicherung erstellen** (Einstellungen → Alles sichern), besonders vor einem Handywechsel.
+Bücher liegen in der IndexedDB des Browsers. Mit Synchronisierung liegt zusätzlich der Text (ca. 0,5 MB pro Buch) in deinem Cloud-Speicher. Eine Seite braucht etwa 200 bis 400 KB, ein Buch mit 300 Seiten also ungefähr 60 bis 120 MB. openBook fragt nach dauerhaftem Speicher. Trotzdem gilt: **regelmäßig eine Sicherung erstellen** (Einstellungen → Alles sichern), besonders vor einem Handywechsel.
 
 > openBook ist für die private Nutzung **eigener** Bücher gedacht (Privatkopie). Bitte keine gescannten Bücher weitergeben.
 
@@ -72,7 +77,12 @@ Bücher liegen in der IndexedDB des Browsers. Eine Seite braucht etwa 200 bis 40
 ```
 index.html            App-Shell
 css/app.css           Design (Bibliothek, Scanner, Leser)
-js/app.js             Router, Bibliothek, Buchdetails, Einstellungen
+js/app.js             Router, Bibliothek, Buchdetails, Profile, Einstellungen
+js/profiles.js        Leseprofile (aktives Profil, Leseeinstellungen)
+js/config.js          Client-IDs für Google Drive / OneDrive
+js/sync/sync.js       Abgleich (Zusammenführen, Löschmarkierungen, Zeitplan)
+js/sync/google.js     Google Drive (appDataFolder, OAuth-Weiterleitung)
+js/sync/onedrive.js   OneDrive (App-Ordner, OAuth mit PKCE)
 js/scanner.js         Kamera-Scanner
 js/reader.js          Kindle-artiger Leser (CSS-Spalten-Paginierung)
 js/pageeditor.js      Seiten bearbeiten

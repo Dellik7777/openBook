@@ -5,6 +5,9 @@ import { processCapture, processCover } from './imageproc.js';
 import { openScanner } from './scanner.js';
 import { openReader } from './reader.js';
 import { openPageEditor } from './pageeditor.js';
+import * as profiles from './profiles.js';
+import * as sync from './sync/sync.js';
+import { clientId, redirectUri } from './sync/oauth.js';
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -72,16 +75,29 @@ async function renderLibrary() {
     h('option', { value: 'added' }, 'Hinzugefügt'),
   );
   sortSel.value = sortMode;
+  const avatarBtn = h('button', { class: 'avatar-btn', 'aria-label': 'Profil wechseln', onClick: () => openProfiles() });
+  const libTitle = h('h2', {});
+  const syncIndicator = syncIndicatorEl();
+  function showProfile() {
+    const p = profiles.current();
+    avatarBtn.replaceChildren(avatar(p));
+    avatarBtn.title = 'Profil: ' + (p ? p.name : '');
+    libTitle.textContent = p && multiProfile ? `Bibliothek · ${p.name.split(/\s+/)[0]}` : 'Bibliothek';
+  }
+  let multiProfile = (await db.getProfiles()).length > 1;
+  showProfile();
 
   const view = h('div', { class: 'page library' },
     h('header', { class: 'topbar' },
       h('h1', { class: 'brand' }, icon('book'), 'openBook'),
       h('div', { class: 'row gap-s' },
+        syncIndicator,
         iconButton('settings', 'Einstellungen & Sicherung', () => openSettings()),
-        h('button', { class: 'btn primary', onClick: () => newBookDialog() }, icon('plus'), 'Buch'),
+        avatarBtn,
+        h('button', { class: 'btn primary btn-add', 'aria-label': 'Neues Buch', onClick: () => newBookDialog() }, icon('plus'), h('span', { class: 'label' }, 'Buch')),
       ),
     ),
-    h('div', { class: 'toolbar' }, h('h2', {}, 'Bibliothek'), sortSel),
+    h('div', { class: 'toolbar' }, libTitle, sortSel),
     badge,
     grid,
   );
@@ -90,8 +106,11 @@ async function renderLibrary() {
   async function fill() {
     pool.clear();
     const books = await db.getBooks();
+    const states = new Map((await db.getStatesOfProfile(profiles.currentId())).map((st) => [st.bookId, st]));
+    for (const b of books) b._state = states.get(b.id) || null;
+    const opened = (b) => (b._state && b._state.lastOpenedAt) || b.createdAt;
     const sorters = {
-      recent: (a, b) => (b.lastOpenedAt || b.createdAt) - (a.lastOpenedAt || a.createdAt),
+      recent: (a, b) => opened(b) - opened(a),
       title: (a, b) => a.title.localeCompare(b.title, 'de'),
       author: (a, b) => (a.author || '').localeCompare(b.author || '', 'de') || a.title.localeCompare(b.title, 'de'),
       added: (a, b) => b.createdAt - a.createdAt,
@@ -110,8 +129,14 @@ async function renderLibrary() {
   }
 
   await fill();
-  const off = db.onChange((e) => { if (e.type === 'book' || e.type === 'pages') fill(); });
-  return () => { off(); badge._off(); pool.clear(); };
+  let t = null;
+  const off = db.onChange((e) => {
+    if (!['book', 'pages', 'sync', 'profile'].includes(e.type)) return;
+    clearTimeout(t);
+    t = setTimeout(async () => { multiProfile = (await db.getProfiles()).length > 1; showProfile(); fill(); }, 100);
+  });
+  const offSwitch = profiles.onSwitch(() => { showProfile(); fill(); });
+  return () => { off(); offSwitch(); badge._off(); syncIndicator._off(); pool.clear(); clearTimeout(t); };
 }
 
 export function coverEl(book, pool, cls = '') {
@@ -126,9 +151,44 @@ export function coverEl(book, pool, cls = '') {
 }
 
 function progressOf(book) {
-  const n = book.pageOrder.length;
-  if (!n || !book.position) return 0;
-  return Math.max(0, Math.min(1, book.position.ratio || 0));
+  const pos = book._state && book._state.position;
+  if (!book.pageOrder.length || !pos) return 0;
+  return Math.max(0, Math.min(1, pos.ratio || 0));
+}
+
+export function avatar(p, cls = '') {
+  return h('span', { class: 'avatar ' + cls, style: { background: (p && p.color) || '#888' } }, profiles.initials(p ? p.name : '?'));
+}
+
+// Kleines Wolken-Symbol mit Sync-Status (nur sichtbar, wenn Sync eingerichtet ist)
+function syncIndicatorEl() {
+  const btn = h('button', { class: 'icon-btn sync-ind', 'aria-label': 'Synchronisierung', onClick: () => {
+    const st = sync.getStatus();
+    if (st.state === 'auth' && sync.getProvider()) sync.getProvider().connect({ silent: false });
+    else if (st.state === 'error' || st.state === 'offline') { toast(st.message || 'Sync-Fehler'); sync.syncNow({ interactive: true }); }
+    else { sync.syncNow({ interactive: true }); toast('Wird synchronisiert …'); }
+  } }, icon('cloud'));
+  btn._off = sync.onStatus((st) => {
+    btn.hidden = st.state === 'off';
+    btn.dataset.state = st.state;
+    btn.title = {
+      idle: 'Synchronisiert' + (st.lastSync ? ' · ' + timeAgo(st.lastSync) : ''),
+      syncing: 'Wird synchronisiert …',
+      error: 'Sync-Fehler: ' + st.message,
+      auth: 'Bitte erneut anmelden (antippen)',
+      offline: 'Offline',
+    }[st.state] || '';
+    btn.setAttribute('aria-label', btn.title);
+  });
+  return btn;
+}
+
+function timeAgo(t) {
+  const d = (Date.now() - t) / 1000;
+  if (d < 60) return 'gerade eben';
+  if (d < 3600) return `vor ${Math.round(d / 60)} Min.`;
+  if (d < 86400) return `vor ${Math.round(d / 3600)} Std.`;
+  return new Date(t).toLocaleDateString('de-DE');
 }
 
 function bookTile(book, pool) {
@@ -231,8 +291,9 @@ async function renderBook(bookId) {
 
   async function fillHead() {
     book = await db.getBook(bookId);
-    if (!book) return;
+    if (!book) { go('#/'); return; }
     const pages = await db.getPagesMeta(bookId);
+    const state = await db.getState(profiles.currentId(), bookId);
     const done = pages.filter((p) => p.ocrStatus === 'done').length;
     const errs = pages.filter((p) => p.ocrStatus === 'error').length;
     const words = pages.reduce((s, p) => s + (p.text ? p.text.split(/\s+/).length : 0), 0);
@@ -245,7 +306,7 @@ async function renderBook(bookId) {
           `${pages.length} Seiten · ${done} erkannt` + (errs ? ` · ${errs} Fehler` : '') + (words ? ` · ca. ${Math.max(1, Math.round(words / 250))} Min. Lesezeit` : ''),
         ),
         h('div', { class: 'row gap-s wrap' },
-          pages.length ? h('button', { class: 'btn primary', onClick: () => go(`#/read/${bookId}`) }, icon('book'), book.position ? 'Weiterlesen' : 'Lesen') : null,
+          pages.length ? h('button', { class: 'btn primary', onClick: () => go(`#/read/${bookId}`) }, icon('book'), state && state.position ? 'Weiterlesen' : 'Lesen') : null,
           h('button', { class: 'btn', onClick: () => go(`#/scan/${bookId}`) }, icon('camera'), 'Seiten scannen'),
         ),
       ),
@@ -256,9 +317,11 @@ async function renderBook(bookId) {
   }
 
   function pageTile(p, i) {
-    const label = { pending: 'wartet', running: 'erkennt …', done: '', error: 'Fehler' }[p.ocrStatus] || '';
+    const label = { pending: 'wartet', running: 'erkennt …', done: '', error: 'Fehler', remote: 'anderes Gerät' }[p.ocrStatus] || '';
     return h('button', { class: 'page-tile', onClick: () => go(`#/page/${bookId}/${p.id}`), 'aria-label': `Seite ${i + 1} bearbeiten` },
-      h('img', { src: pool.get(p.thumb), alt: '', loading: 'lazy' }),
+      p.thumb
+        ? h('img', { src: pool.get(p.thumb), alt: '', loading: 'lazy' })
+        : h('span', { class: 'page-textthumb' }, (p.text || '').slice(0, 220)),
       h('span', { class: 'page-no' }, i + 1),
       label ? h('span', { class: 'page-status ' + p.ocrStatus }, label) : null,
     );
@@ -284,12 +347,14 @@ async function renderBook(bookId) {
       h('button', { class: 'menu-item', onClick: async () => {
         s.close();
         const pages = await db.getPagesMeta(bookId);
-        const failed = pages.filter((p) => p.ocrStatus !== 'done');
+        const withImg = pages.filter((p) => p.image);
+        if (!withImg.length) { toast('Auf diesem Gerät gibt es keine Seitenfotos zum Erkennen'); return; }
+        const failed = withImg.filter((p) => p.ocrStatus !== 'done');
         const ok = await confirmDialog('Text neu erkennen', failed.length
           ? `Nur die ${failed.length} nicht erkannten Seiten erneut erkennen?`
           : 'Alle Seiten erneut erkennen? Manuelle Textkorrekturen gehen dabei verloren.', 'Starten');
         if (!ok) return;
-        const list = failed.length ? failed : pages;
+        const list = failed.length ? failed : withImg;
         for (const p of list) { await db.updatePage(p.id, { ocrStatus: 'pending' }); ocr.enqueue(p.id); }
       } }, icon('refresh'), 'Text neu erkennen'),
       h('button', { class: 'menu-item danger', onClick: async () => {
@@ -323,7 +388,9 @@ async function renderBook(bookId) {
       h('div', { class: 'row gap-s' },
         h('button', { type: 'button', class: 'btn small', onClick: async () => {
           const pages = await db.getPagesMeta(bookId);
-          if (pages[0]) { cover = await processCover(pages[0].image); showPrev(); }
+          const first = pages.find((p) => p.image);
+          if (first) { cover = await processCover(first.image); showPrev(); }
+          else toast('Auf diesem Gerät gibt es keine Seitenfotos');
         } }, 'Erste Seite als Cover'),
         cover ? h('button', { type: 'button', class: 'btn small', onClick: () => { cover = null; showPrev(); } }, 'Cover entfernen') : null,
       ),
@@ -335,7 +402,7 @@ async function renderBook(bookId) {
   await fillHead();
   let t = null;
   const off = db.onChange((e) => {
-    if (e.bookId !== bookId) return;
+    if (e.type !== 'sync' && e.bookId !== bookId) return;
     clearTimeout(t);
     t = setTimeout(() => { pool.clear(); fillHead(); }, 150);
   });
@@ -351,7 +418,9 @@ async function openSettings() {
   const scanFilter = h('input', { type: 'checkbox', checked: localStorage.getItem('ob.scanFilter') !== '0',
     onChange: (e) => localStorage.setItem('ob.scanFilter', e.target.checked ? '1' : '0') });
 
+  const syncEl = syncCard();
   const s = sheet('Einstellungen', h('div', { class: 'stack' },
+    syncEl,
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Scan-Filter'), h('br'), h('span', { class: 'muted small' }, 'Fotos in Graustufen mit hellem Papier speichern. Bessere Erkennung, weniger Speicher.')), scanFilter),
     h('div', { class: 'card' },
       h('strong', {}, 'Speicher'),
@@ -390,8 +459,8 @@ async function openSettings() {
         } }, icon('upload'), 'Sicherung laden'),
       ),
     ),
-    h('p', { class: 'muted small' }, 'openBook speichert alles nur auf diesem Gerät. Die Texterkennung läuft lokal, es werden keine Fotos hochgeladen. Nur für Bücher, die dir selbst gehören.'),
-  ));
+    h('p', { class: 'muted small' }, 'Die Texterkennung läuft lokal, Fotos werden nie hochgeladen. Ohne Synchronisierung bleibt alles nur auf diesem Gerät. Nur für Bücher, die dir selbst gehören.'),
+  ), { onClose: () => syncEl._off() });
 }
 
 // ---------- Start ----------
@@ -400,5 +469,132 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
 }
 
-route();
-ocr.resume();
+(async () => {
+  try {
+    await profiles.ensureProfile();
+    await sync.init(); // verarbeitet ggf. die Rückkehr von der Anmeldeseite
+  } catch (e) {
+    console.error(e);
+  }
+  route();
+  ocr.resume();
+})();
+
+// ---------- Leseprofile ----------
+
+async function openProfiles() {
+  const list = h('div', { class: 'menu' });
+  async function fillList() {
+    const all = (await db.getProfiles()).sort((a, b) => a.createdAt - b.createdAt);
+    const cur = profiles.currentId();
+    list.replaceChildren(...all.map((p) => h('div', { class: 'profile-row' + (p.id === cur ? ' current' : '') },
+      h('button', { class: 'profile-pick', onClick: async () => {
+        await profiles.switchTo(p.id);
+        s.close();
+        toast(`Profil „${p.name}“`);
+      } }, avatar(p, 'big'), h('span', { class: 'grow' }, h('strong', {}, p.name), p.id === cur ? h('span', { class: 'muted small' }, ' · aktiv') : null)),
+      iconButton('edit', `${p.name} bearbeiten`, () => editProfile(p, all.length), 'small'),
+    )));
+  }
+  const s = sheet('Wer liest?', h('div', { class: 'stack' },
+    h('p', { class: 'muted small' }, 'Jedes Profil hat eigene Lesepositionen, Lesezeichen und Schrifteinstellungen. Die Bücher teilen sich alle Profile.'),
+    list,
+    h('button', { class: 'btn block', onClick: () => editProfile(null, 0) }, icon('plus'), 'Profil hinzufügen'),
+  ));
+  await fillList();
+
+  async function editProfile(p, count) {
+    const used = new Set((await db.getProfiles()).map((x) => x.color));
+    let color = p ? p.color : (db.PROFILE_COLORS.find((c) => !used.has(c)) || db.PROFILE_COLORS[0]);
+    const name = h('input', { class: 'input', value: p ? p.name : '', placeholder: 'Name', maxlength: 30 });
+    const colors = h('div', { class: 'color-row' });
+    const paint = () => colors.replaceChildren(...db.PROFILE_COLORS.map((c) => h('button', {
+      type: 'button', class: 'color-dot' + (c === color ? ' on' : ''), style: { background: c }, 'aria-label': 'Farbe ' + c,
+      onClick: () => { color = c; paint(); },
+    })));
+    paint();
+    const e = sheet(p ? 'Profil bearbeiten' : 'Neues Profil', h('form', { class: 'stack', onSubmit: async (ev) => {
+      ev.preventDefault();
+      const n = name.value.trim();
+      if (!n) { name.focus(); return; }
+      if (p) {
+        const cur = await db.getProfile(p.id);
+        await db.putProfile({ ...cur, name: n, color });
+      } else {
+        const np = await db.createProfile(n, color);
+        await profiles.switchTo(np.id);
+      }
+      e.close();
+      await fillList();
+    } },
+      name, colors,
+      h('button', { class: 'btn primary block', type: 'submit' }, 'Speichern'),
+      p && count > 1 ? h('button', { type: 'button', class: 'btn danger block', onClick: async () => {
+        if (!(await confirmDialog('Profil löschen?', `Lesepositionen und Lesezeichen von „${p.name}“ werden gelöscht – auf allen synchronisierten Geräten. Die Bücher bleiben erhalten.`, 'Löschen', true))) return;
+        await db.deleteProfile(p.id);
+        if (profiles.currentId() === p.id) await profiles.ensureProfile().then((np) => profiles.switchTo(np.id));
+        e.close();
+        await fillList();
+      } }, icon('trash'), 'Profil löschen') : null,
+    ));
+    setTimeout(() => name.focus(), 250);
+  }
+}
+
+// ---------- Synchronisierung (Einstellungen) ----------
+
+function syncCard() {
+  const card = h('div', { class: 'card' });
+  card._off = sync.onStatus(render);
+  function render(st) {
+    const prov = sync.getProvider();
+    card.replaceChildren(h('strong', {}, 'Synchronisierung'));
+    if (!prov) {
+      card.append(
+        h('p', { class: 'muted small' }, 'Texte, Lesepositionen, Lesezeichen und Profile auf all deinen Geräten abgleichen – über deinen eigenen Cloud-Speicher. Fotos bleiben auf dem Gerät.'),
+        h('div', { class: 'row gap-s wrap' },
+          ...Object.values(sync.PROVIDERS).map((p) => h('button', {
+            class: 'btn small',
+            disabled: !p.isConfigured(),
+            onClick: () => sync.connect(p.id),
+          }, icon('cloud'), p.label + ' verbinden')),
+        ),
+      );
+      if (!Object.values(sync.PROVIDERS).some((p) => p.isConfigured())) {
+        card.append(h('p', { class: 'muted small' }, 'Noch nicht eingerichtet: Es fehlt eine Client-ID (siehe Anleitung SYNC.md oder „Erweitert“).'));
+      }
+    } else {
+      const lines = {
+        idle: st.lastSync ? `Zuletzt synchronisiert ${timeAgo(st.lastSync)}` : 'Verbunden',
+        syncing: 'Wird synchronisiert …',
+        error: 'Fehler: ' + st.message,
+        auth: 'Anmeldung abgelaufen – bitte neu anmelden.',
+        offline: 'Offline – wird nachgeholt, sobald Internet da ist.',
+      };
+      card.append(
+        h('p', { class: 'small' }, `${prov.label}${prov.account() ? ' · ' + prov.account() : ''}`),
+        h('p', { class: 'muted small' }, lines[st.state] || ''),
+        h('div', { class: 'row gap-s wrap' },
+          st.state === 'auth'
+            ? h('button', { class: 'btn small primary', onClick: () => prov.connect({ silent: false }) }, 'Neu anmelden')
+            : h('button', { class: 'btn small', disabled: st.state === 'syncing', onClick: () => sync.syncNow({ interactive: true }) }, icon('refresh'), 'Jetzt synchronisieren'),
+          h('button', { class: 'btn small', onClick: async () => {
+            if (await confirmDialog('Synchronisierung trennen?', 'Die Bücher bleiben auf diesem Gerät. Die Daten in der Cloud werden nicht gelöscht.', 'Trennen')) sync.disconnect();
+          } }, 'Trennen'),
+        ),
+      );
+    }
+    card.append(h('details', { class: 'advanced' },
+      h('summary', { class: 'small muted' }, 'Erweitert: eigene Client-IDs'),
+      h('p', { class: 'muted small' }, 'Weiterleitungs-Adresse für die Einrichtung: ', h('code', {}, redirectUri())),
+      ...[['google', 'Google Client-ID'], ['microsoft', 'Microsoft Client-ID']].map(([k, label]) => {
+        let stored = '';
+        try { stored = localStorage.getItem('ob.cfg.' + k) || ''; } catch (e) { /* ignorieren */ }
+        return h('label', { class: 'stack-s small' }, label,
+          h('input', { class: 'input', value: stored, placeholder: clientId(k) || 'nicht gesetzt', autocomplete: 'off', spellcheck: 'false',
+            onChange: (e) => { try { localStorage.setItem('ob.cfg.' + k, e.target.value.trim()); } catch (err) { /* ignorieren */ } render(sync.getStatus()); } }));
+      }),
+    ));
+  }
+  return card;
+}

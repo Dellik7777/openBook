@@ -112,7 +112,7 @@ async function runOn(w) {
   notify();
   try {
     const page = await db.getPage(pageId);
-    if (page) {
+    if (page && page.image) {
       await db.updatePage(pageId, { ocrStatus: 'running' });
       const { data } = await w.worker.recognize(page.image, {}, { blocks: true, text: true });
       const paras = paragraphsFromOcr(data);
