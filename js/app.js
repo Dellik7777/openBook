@@ -511,7 +511,7 @@ async function renderBook(bookId) {
     toast(`${files.length} Fotos werden verarbeitet …`);
     let n = 0;
     for (const f of files) {
-      const parts = await processCapture(f, { split, scanFilter });
+      const parts = await processCapture(f, { split, scanFilter, autoCrop: localStorage.getItem('ob.autoCrop') !== '0' });
       for (const part of parts) {
         const page = await db.addPage(bookId, part);
         ocr.enqueue(page.id);
@@ -590,6 +590,7 @@ async function renderBook(bookId) {
       h('span', { class: 'page-no' }, p.printedNo ? `S. ${p.printedNo}` : i + 1),
       label ? h('span', { class: 'page-status ' + p.ocrStatus }, label) : null,
       figPages.has(p.id) ? h('span', { class: 'page-fig', title: 'Enthält Abbildung' }, icon('figure')) : null,
+      !label && (p.uncertain || []).length ? h('span', { class: 'page-status check', title: 'Unsicher erkannte Wörter prüfen' }, `${p.uncertain.length} prüfen`) : null,
     );
   }
 
@@ -743,10 +744,13 @@ async function openSettings() {
 
   const syncEl = syncCard();
   const lockEl = await lockCard();
+  const autoCropBox = h('input', { type: 'checkbox', checked: localStorage.getItem('ob.autoCrop') !== '0',
+    onChange: (e) => localStorage.setItem('ob.autoCrop', e.target.checked ? '1' : '0') });
   const s = sheet('Einstellungen', h('div', { class: 'stack' },
     syncEl,
     h('a', { class: 'card card-link', href: '#/statistik', onClick: () => s.close() }, h('strong', {}, icon('stats'), ' Lesestatistik'), h('span', { class: 'muted small' }, 'Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher')),
     lockEl,
+    h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Seiten gerade rücken'), h('br'), h('span', { class: 'muted small' }, 'Seite im Foto finden, Tisch abschneiden, schräge Aufnahmen und Wölbung zur Buchmitte ausgleichen.')), autoCropBox),
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Scan-Filter'), h('br'), h('span', { class: 'muted small' }, 'Fotos in Graustufen mit hellem Papier speichern. Bessere Erkennung, weniger Speicher.')), scanFilter),
     h('div', { class: 'card' },
       h('strong', {}, 'Speicher'),

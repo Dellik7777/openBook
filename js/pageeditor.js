@@ -23,6 +23,7 @@ export async function openPageEditor(root, bookId, pageId) {
   let cropMode = 'crop';
   const text = h('textarea', { class: 'input pe-text', spellcheck: 'true', lang: 'de', placeholder: 'Noch kein Text erkannt.' });
   const status = h('div', { class: 'muted small' });
+  const checkBox = h('div', { class: 'uncertain', hidden: true });
   const title = h('div', { class: 'grow pe-title' });
   const cropOk = h('button', { class: 'btn small primary', onClick: () => endCrop(true) }, icon('check'), 'Zuschneiden');
   const cropBtns = h('div', { class: 'row gap-s', hidden: true },
@@ -62,6 +63,7 @@ export async function openPageEditor(root, bookId, pageId) {
         h('label', { class: 'row gap-s pn-row' }, h('strong', {}, 'Gedruckte Seitenzahl'), printedNo, pnHint),
         h('div', { class: 'row between' }, h('strong', {}, 'Erkannter Text'), status),
         h('p', { class: 'muted small' }, 'Absätze mit einer Leerzeile trennen. Formatierung: **fett**, *kursiv*, „- “ am Anfang für Aufzählungen (je Ebene 2 Leerzeichen davor), „## “ für Überschriften. Änderungen werden automatisch gespeichert.'),
+        checkBox,
         text,
       ),
     ),
@@ -85,6 +87,7 @@ export async function openPageEditor(root, bookId, pageId) {
     pnHint.textContent = page.printedNoManual ? 'von Hand' : page.printedNo ? 'erkannt' : (page.ocrStatus === 'done' ? 'keine erkannt' : '');
     renderFigures();
     if (document.activeElement !== text) text.value = page.text || '';
+    renderUncertain();
     const st = {
       pending: 'Wartet auf Erkennung',
       running: 'Text wird erkannt …',
@@ -95,6 +98,30 @@ export async function openPageEditor(root, bookId, pageId) {
     status.textContent = st || '';
     text.disabled = ['running', 'pending', 'remote'].includes(page.ocrStatus);
   }
+
+  // Unsichere Wörter: antippen springt zur Stelle im Text
+  let searchFrom = 0;
+  function renderUncertain() {
+    const words = (page.uncertain || []).filter((w) => text.value.includes(w));
+    checkBox.hidden = !words.length;
+    if (!words.length) return;
+    checkBox.replaceChildren(
+      h('div', { class: 'row between' }, h('strong', { class: 'small' }, `Bitte prüfen: ${words.length} unsicher erkannte ${words.length === 1 ? 'Wort' : 'Wörter'}`),
+        h('button', { class: 'linkish small', onClick: async () => { page = await db.updatePage(pageId, { uncertain: [] }); renderUncertain(); } }, 'Alle geprüft')),
+      h('div', { class: 'tag-row' }, ...words.map((w) => h('button', { class: 'tag-chip warn', onClick: () => {
+        let i = text.value.indexOf(w, searchFrom);
+        if (i < 0) i = text.value.indexOf(w);
+        if (i < 0) return;
+        searchFrom = i + w.length;
+        text.focus();
+        text.setSelectionRange(i, i + w.length);
+        // Auswahl in den sichtbaren Bereich scrollen
+        const before = text.value.slice(0, i).split('\n').length;
+        text.scrollTop = Math.max(0, (before - 3) * parseFloat(getComputedStyle(text).lineHeight || 24));
+      } }, w))),
+    );
+  }
+  text.addEventListener('input', () => { clearTimeout(text._ut); text._ut = setTimeout(renderUncertain, 500); });
 
   printedNo.addEventListener('change', async () => {
     const v = printedNo.value.trim();

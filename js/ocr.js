@@ -62,7 +62,9 @@ async function ensureWorkers() {
           gzip: true,
         });
         // Buchseiten: automatische Seitensegmentierung, Wortabstände erhalten
-        await worker.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '0' });
+        let psm = '3';
+        try { psm = localStorage.getItem('ob.psm') || psm; } catch (e) { /* */ }
+        await worker.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: '0' });
         workers.push({ worker, busy: false });
       }
     })().catch((e) => { workerInit = null; throw e; });
@@ -131,6 +133,7 @@ async function runOn(w) {
           confidence: Math.round(data.confidence || 0),
         };
         if (!page.printedNoManual) patch.printedNo = res.printedNo;
+        patch.uncertain = uncertainWords(data, patch.text);
         await db.updatePage(pageId, patch);
       }
     }
@@ -200,4 +203,24 @@ function markStyles(data, gray) {
   try { if (localStorage.getItem('ob.debug')) debug = []; } catch (e) { /* ignorieren */ }
   try { detectStyles(gray, words, 1, debug); } catch (e) { console.warn('Stil-Erkennung fehlgeschlagen', e); }
   if (debug) window.__obStyleDebug = debug;
+}
+
+// Wörter, bei denen die Erkennung unsicher war (zum gezielten Nachprüfen im Editor)
+function uncertainWords(data, text) {
+  const out = new Set();
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        for (const w of line.words || []) {
+          const t = (w.text || '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+          if (t.length < 3 || (w.confidence ?? 100) >= 62) continue;
+          if (!/\p{L}/u.test(t)) continue;
+          if (text && !text.includes(t)) continue; // z. B. Kopfzeile, die nicht im Text steht
+          out.add(t);
+          if (out.size >= 40) return [...out];
+        }
+      }
+    }
+  }
+  return [...out];
 }

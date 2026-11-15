@@ -4,6 +4,11 @@ import * as db from './db.js';
 import * as ocr from './ocr.js';
 import { h, icon, iconButton, toast, pickFiles, UrlPool } from './ui.js';
 import { processCapture, grabFrame, cropFigure } from './imageproc.js';
+import { quality, motionProbe } from './pagedetect.js';
+
+// Schwellwerte (Bewegung: mittlere Grauwert-Änderung pro Bildpunkt eines 64-px-Vorschaubilds)
+const MOVE = 6, STILL = 2.2, STILL_MS = 700;
+const SHARP_MIN = 20, DARK_MIN = 50;
 import { checkPages, describe } from './pagecheck.js';
 
 // afterPageId: Nachscan-Modus – neue Seiten werden hinter dieser Seite eingefügt
@@ -19,6 +24,8 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
   let wakeLock = null;
   let split = localStorage.getItem('ob.split') === '1';
   const scanFilter = localStorage.getItem('ob.scanFilter') !== '0';
+  const autoCrop = localStorage.getItem('ob.autoCrop') !== '0';
+  let auto = false, autoState = 'settle', stillSince = 0, prevProbe = null, autoTimer = null;
   const captures = []; // je Aufnahme ein Array von pageIds (Doppelseite = 2)
   const capturedCount = () => captures.reduce((n, c) => n + c.length, 0);
   let processing = Promise.resolve();
@@ -45,6 +52,8 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
   } }, icon('split'), 'Doppelseite');
 
   const figBtn = h('button', { class: 'chip', onClick: () => setFigureMode(!figureMode) }, icon('figure'), 'Abbildung');
+  const autoBtn = h('button', { class: 'chip', onClick: () => setAuto(!auto) }, icon('play'), 'Auto');
+  const autoInfo = h('div', { class: 'scan-auto', hidden: true }, h('span', { class: 'scan-auto-text' }), h('span', { class: 'scan-auto-bar' }, h('span', {})));
   function setFigureMode(on) {
     figureMode = on;
     figBtn.classList.toggle('on', on);
@@ -69,10 +78,11 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
     h('header', { class: 'scan-top' },
       iconButton('close', 'Scanner schließen', () => finish()),
       h('div', { class: 'scan-title' }, h('div', {}, book.title), counter),
-      h('div', { class: 'row gap-s wrap end scan-chips' }, torchBtn, figBtn, splitBtn),
+      h('div', { class: 'row gap-s wrap end scan-chips' }, torchBtn, autoBtn, figBtn, splitBtn),
     ),
     insertBar,
     notice,
+    autoInfo,
     h('footer', { class: 'scan-bottom' },
       h('button', { class: 'scan-side', onClick: () => undo(), 'aria-label': 'Letzte Aufnahme löschen' }, icon('undo'), h('span', {}, 'Zurück')),
       shutter,
@@ -153,17 +163,63 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
     counter.textContent = `${total} ${total === 1 ? 'Seite' : 'Seiten'}` + (added ? ` · +${added} neu` : '') + (pendingCount ? ' · speichert …' : '');
   }
 
-  function capture() {
-    if (!video.videoWidth) return;
+  function capture({ fromAuto = false } = {}) {
+    if (!video.videoWidth) return false;
     const frame = grabFrame(video);
+    // Qualitätscheck: unscharf oder zu dunkel?
+    const q = quality(frame);
+    const problem = q.sharp < SHARP_MIN ? 'unscharf' : q.bright < DARK_MIN ? 'zu dunkel' : null;
+    if (problem && fromAuto) return false; // Auto-Auslöser wartet auf ein besseres Bild
     flashEl.classList.remove('go');
     void flashEl.offsetWidth;
     flashEl.classList.add('go');
     if (navigator.vibrate) navigator.vibrate(15);
-    enqueueProcessing(frame);
+    enqueueProcessing(frame, problem);
+    return true;
   }
 
-  function enqueueProcessing(src) {
+  // ---------- Auto-Auslöser: nach dem Umblättern auslösen, sobald das Bild ruhig ist ----------
+  function setAuto(on) {
+    auto = on;
+    autoBtn.classList.toggle('on', on);
+    autoInfo.hidden = !on;
+    clearInterval(autoTimer);
+    prevProbe = null; stillSince = 0; autoState = 'settle';
+    if (on) {
+      toast('Auto: Seite ruhig halten – nach dem Umblättern löst Lesepixel selbst aus');
+      autoTimer = setInterval(autoTick, 150);
+    }
+    showAuto();
+  }
+  function showAuto(progress = 0) {
+    autoInfo.querySelector('.scan-auto-text').textContent = autoState === 'armed' ? 'Umblättern …' : 'Ruhig halten …';
+    autoInfo.querySelector('.scan-auto-bar span').style.width = Math.round(progress * 100) + '%';
+    autoInfo.classList.toggle('armed', autoState === 'armed');
+  }
+  function autoTick() {
+    if (!auto || !video.videoWidth || !notice.hidden) return; // bei offenen Hinweisen pausieren
+    const { frame, diff } = motionProbe(video, prevProbe);
+    prevProbe = frame;
+    if (autoState === 'armed') {
+      if (diff > MOVE) { autoState = 'moving'; stillSince = 0; }
+      showAuto();
+      return;
+    }
+    if (diff < STILL) {
+      if (!stillSince) stillSince = Date.now();
+      const p = (Date.now() - stillSince) / STILL_MS;
+      showAuto(Math.min(1, p));
+      if (p >= 1) {
+        if (capture({ fromAuto: true })) { autoState = 'armed'; stillSince = 0; showAuto(); }
+        else stillSince = Date.now(); // unscharf → weiter warten
+      }
+    } else {
+      stillSince = 0;
+      showAuto();
+    }
+  }
+
+  function enqueueProcessing(src, problem = null) {
     pendingCount++;
     updateCounter();
     const asFigure = figureMode;
@@ -172,7 +228,7 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
     processing = processing.then(async () => {
       try {
         // Abbildungen in Farbe und ohne Scan-Filter
-        const parts = await processCapture(src, { split: doSplit, scanFilter: scanFilter && !asFigure });
+        const parts = await processCapture(src, { split: doSplit, scanFilter: scanFilter && !asFigure, autoCrop });
         const group = [];
         captures.push(group);
         for (const part of parts) {
@@ -199,6 +255,10 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
             ocr.enqueue(page.id);
           }
           lastId = page.id;
+          if (problem && part === parts[parts.length - 1]) {
+            queue.unshift({ type: 'quality', key: 'q:' + page.id, group, problem });
+            showNotice();
+          }
           pool.clear();
           lastThumb.replaceChildren(h('img', { src: pool.get(part.thumb), alt: '' }), thumbLabel);
           thumbLabel.textContent = asFigure ? 'Abbildung' : 'Fertig';
@@ -296,6 +356,18 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
       next();
     };
     const buttons = [];
+    if (is.type === 'quality') {
+      buttons.push(h('button', { class: 'btn small primary', onClick: async () => {
+        for (const id of is.group) await db.deletePage(id);
+        const gi = captures.indexOf(is.group); if (gi >= 0) captures.splice(gi, 1);
+        updateCounter(); next(); toast('Gelöscht – bitte nochmal fotografieren');
+      } }, icon('camera'), 'Nochmal'));
+      buttons.push(h('button', { class: 'btn small', onClick: next }, 'Behalten'));
+      notice.hidden = false;
+      notice.replaceChildren(h('div', { class: 'scan-notice-text' }, h('strong', {}, 'Foto ist ' + is.problem + '. '), 'Die Texterkennung wird dann ungenau.'), h('div', { class: 'row gap-s wrap' }, ...buttons));
+      if (navigator.vibrate) navigator.vibrate([30, 60, 30]);
+      return;
+    }
     if (is.type === 'missing') {
       buttons.push(h('button', { class: 'btn small primary', onClick: () => {
         insertAfter = is.afterPageId; insertLeft = is.count; updateInsertBar(); next();
@@ -322,6 +394,7 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
 
   return () => {
     offDb();
+    clearInterval(autoTimer);
     clearTimeout(checkTimer);
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('visibilitychange', onVis);

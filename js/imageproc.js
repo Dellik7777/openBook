@@ -1,5 +1,7 @@
 // Bildverarbeitung für Buchseiten: Skalieren, Scan-Filter, Teilen, Drehen, Zuschneiden.
 
+import { detectPage, warpPerspective, flattenCurl } from './pagedetect.js';
+
 const MAX_EDGE = 2200;   // lange Kante gespeicherter Seiten (gut lesbar + gute OCR)
 const THUMB_EDGE = 320;
 const JPEG_Q = 0.82;
@@ -142,8 +144,21 @@ export async function makeThumb(src) {
 
 // Erzeugt aus einer Aufnahme (Video-Frame, Canvas, Blob) eine oder zwei Seiten.
 // Ergebnis: [{ image: Blob, thumb: Blob }]
-export async function processCapture(source, { split = false, scanFilter = true } = {}) {
-  const src = source instanceof Blob ? await loadBitmap(source) : source;
+export async function processCapture(source, { split = false, scanFilter = true, autoCrop = true } = {}) {
+  let src = source instanceof Blob ? await loadBitmap(source) : source;
+  let cropped = false;
+  if (autoCrop) {
+    // Seite im Foto finden, Perspektive entzerren, Wölbung glätten
+    try {
+      const det = detectPage(src);
+      if (det) {
+        const warped = flattenCurl(warpPerspective(src, det.quad, split ? MAX_EDGE * 1.6 : MAX_EDGE));
+        if (src.close) try { src.close(); } catch (e) { /* */ }
+        src = warped;
+        cropped = true;
+      }
+    } catch (e) { console.warn('Seitenerkennung übersprungen', e); }
+  }
   const { w, h } = dims(src);
   const parts = split
     ? [[0, 0, Math.floor(w / 2), h], [Math.floor(w / 2), 0, w - Math.floor(w / 2), h]]
@@ -154,7 +169,7 @@ export async function processCapture(source, { split = false, scanFilter = true 
     if (scanFilter) enhance(c);
     const image = await toBlob(c);
     const thumb = await makeThumb(c);
-    out.push({ image, thumb });
+    out.push({ image, thumb, cropped });
   }
   if (src.close) try { src.close(); } catch (e) { /* ignorieren */ }
   return out;
