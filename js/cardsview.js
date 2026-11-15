@@ -8,7 +8,7 @@ import { h, icon, iconButton, toast } from './ui.js';
 
 export async function openCards(root, bookId = null) {
   const profileId = profiles.currentId();
-  const canOpen = (b) => !b.locked || !lock.isConfigured() || lock.isUnlocked();
+  const canOpen = (b) => (b.enc ? lock.vaultOpen() : !b.locked || !lock.isConfigured() || lock.isUnlocked());
   const book = bookId ? await db.getBook(bookId) : null;
   if (book && !(await lock.ensureBookAccess(book))) { location.hash = '#/'; return; }
   const all = await collect(profileId, { bookId, canOpen });

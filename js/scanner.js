@@ -328,7 +328,7 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
   async function runCheck() {
     const b = await db.getBook(bookId);
     if (!b) return;
-    const pages = await db.getPagesMeta(bookId);
+    const pages = await db.getPagesMeta(bookId, { images: false });
     // Seitenzahl der letzten Aufnahme am Vorschaubild anzeigen
     const last = pages.find((p) => p.id === lastId);
     if (last && last.printedNo && !thumbLabel.textContent.startsWith('Abb')) thumbLabel.textContent = `S. ${last.printedNo}`;

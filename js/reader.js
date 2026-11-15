@@ -33,7 +33,7 @@ export async function openReader(root, bookId) {
   let book = await db.getBook(bookId);
   if (!book) { location.hash = '#/'; return; }
   if (!(await ensureBookAccess(book))) { location.hash = '#/'; return; }
-  let pages = await db.getPagesMeta(bookId);
+  let pages = await db.getPagesMeta(bookId, { images: false });
   if (!pages.length) { location.hash = `#/book/${bookId}`; return; }
   const profileId = profiles.currentId();
   let state = (await db.getState(profileId, bookId)) || { position: null, bookmarks: [] };
@@ -393,9 +393,14 @@ export async function openReader(root, bookId) {
     imgIndex = Math.max(0, Math.min(pages.length - 1, i));
     pool.clear();
     const p = pages[imgIndex];
-    imgView.replaceChildren(p.image
-      ? h('img', { src: pool.get(p.image), alt: `Seite ${imgIndex + 1}`, draggable: 'false' })
-      : h('div', { class: 'r-noimage' }, h('p', {}, `Seite ${imgIndex + 1}`), h('p', { class: 'muted small' }, 'Das Originalfoto liegt nur auf dem Gerät, mit dem die Seite gescannt wurde. Synchronisiert wird nur der Text.')));
+    const noImg = () => h('div', { class: 'r-noimage' }, h('p', {}, `Seite ${imgIndex + 1}`), h('p', { class: 'muted small' }, 'Das Originalfoto liegt nur auf dem Gerät, mit dem die Seite gescannt wurde (oder es wurde gelöscht). Synchronisiert wird ohne „Fotos mitsichern“ nur der Text.'));
+    if (p.image) imgView.replaceChildren(h('img', { src: pool.get(p.image), alt: `Seite ${imgIndex + 1}`, draggable: 'false' }));
+    else if (p.hasImage) {
+      // verschlüsseltes Foto erst beim Anzeigen entschlüsseln
+      imgView.replaceChildren(h('div', { class: 'r-noimage' }, h('span', { class: 'spinner' })));
+      const want = imgIndex;
+      db.pageImage(p).then((blob) => { if (imgIndex !== want) return; imgView.replaceChildren(blob ? h('img', { src: pool.get(blob), alt: `Seite ${want + 1}`, draggable: 'false' }) : noImg()); });
+    } else imgView.replaceChildren(noImg());
     imgView.classList.toggle('zoomed', zoomed);
     imgView.scrollTo(0, 0);
     // Position so speichern, dass die Textansicht dieselbe Buchseite findet
@@ -1225,7 +1230,7 @@ export async function openReader(root, bookId) {
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(async () => {
       const keep = pos;
-      const newPages = await db.getPagesMeta(bookId);
+      const newPages = await db.getPagesMeta(bookId, { images: false });
       book = (await db.getBook(bookId)) || book;
       if (!newPages.length) return;
       const figCount = [...figMap.values()].flat().length;

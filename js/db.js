@@ -17,6 +17,13 @@
 // Bücher haben zusätzlich: folderId (null = Bibliothek), tags: [string], locked (Sperre)
 //
 // Seiten haben zusätzlich: printedNo (gedruckte Seitenzahl), printedNoManual, paraY (Lage der Absätze)
+//
+// Verschlüsselung (gesperrte Bücher, siehe vault.js): Bücher mit enc=true speichern Texte, Fotos,
+// Abbildungen, Markierungen und Lesezeichen nur verschlüsselt (Felder sx/simg/sthumb, Datensatz enc=1).
+// Die Lesefunktionen hier entschlüsseln automatisch, solange der Tresor offen ist; sonst liefern sie
+// die Datensätze ohne Inhalt mit sealed=true. Schreiben in ein verschlüsseltes Buch braucht den offenen Tresor.
+
+import * as vault from './vault.js';
 
 const DB_NAME = 'openbook';
 const DB_VERSION = 4;
@@ -131,6 +138,105 @@ async function getOne(store, key) {
   return promisify(db.transaction(store).objectStore(store).get(key));
 }
 
+// ---------- Verschlüsselung gesperrter Bücher ----------
+
+const encCache = new Map(); // bookId → enc
+async function isEncBook(bookId) {
+  if (!bookId) return false;
+  if (!encCache.has(bookId)) { const b = await getOne('books', bookId); encCache.set(bookId, !!(b && b.enc)); }
+  return encCache.get(bookId);
+}
+const SECRET = {
+  pages: ['text', 'lines', 'uncertain'],
+  figures: ['caption'],
+  states: ['highlights', 'bookmarks'],
+};
+const BLOBS = { pages: ['image', 'thumb'], figures: ['image'], states: [] };
+const EMPTY = { text: null, lines: null, uncertain: null, caption: '', highlights: [], bookmarks: [], image: null, thumb: null };
+const BLOB_FIELD = { image: 'simg', thumb: 'sthumb' };
+
+// Klartext-Datensatz → gespeicherte Form (verschlüsselt, wenn das Buch verschlüsselt ist)
+async function seal(kind, rec, existing = null) {
+  if (!rec || rec.enc || !(await isEncBook(rec.bookId))) {
+    if (rec && !rec.enc && (rec.sealed || rec.hasImage !== undefined)) { const r = { ...rec }; delete r.sealed; delete r.hasImage; return r; }
+    return rec;
+  }
+  if (!vault.isOpen()) throw new vault.LockedError();
+  const out = { ...rec, enc: 1 };
+  delete out.sealed; delete out.hasImage;
+  const secret = {};
+  for (const k of SECRET[kind]) { secret[k] = rec[k] ?? EMPTY[k]; out[k] = EMPTY[k]; }
+  out.sx = await vault.sealJson(secret);
+  for (const k of BLOBS[kind]) {
+    const f = BLOB_FIELD[k];
+    if (rec[k]) out[f] = await vault.sealBlob(rec[k]);
+    else if (k === 'image' && rec.hasImage && existing && existing[f]) out[f] = existing[f]; // ohne Bild geladen → altes behalten
+    else out[f] = null;
+    out[k] = null;
+  }
+  return out;
+}
+
+// Gespeicherte Form → Klartext (images=false: Seitenfoto nicht entschlüsseln, nur hasImage)
+async function unseal(kind, rec, { images = true, raw = false } = {}) {
+  if (!rec || !rec.enc || raw) return rec;
+  const out = { ...rec };
+  delete out.enc; delete out.sx;
+  for (const f of Object.values(BLOB_FIELD)) delete out[f];
+  // hasImage nur, wenn das Foto nicht mitgeladen wird (dann bleibt es beim Zurückschreiben erhalten)
+  if (kind === 'pages' && (!images || !vault.isOpen())) out.hasImage = !!rec.simg;
+  if (!vault.isOpen()) { out.sealed = true; return out; }
+  try {
+    Object.assign(out, await vault.openJson(rec.sx));
+    for (const k of BLOBS[kind]) {
+      const f = BLOB_FIELD[k];
+      out[k] = rec[f] && (images || k !== 'image' || kind !== 'pages') ? await vault.openBlob(rec[f]) : null;
+    }
+  } catch (e) {
+    console.warn('Entschlüsseln fehlgeschlagen', e);
+    out.sealed = true;
+  }
+  return out;
+}
+const unsealAll = (kind, list, opts) => Promise.all(list.map((r) => unseal(kind, r, opts)));
+
+export const isSealed = (rec) => !!(rec && rec.sealed);
+
+// Seitenfoto bei Bedarf laden (Seiten, die ohne Foto geladen wurden)
+export async function pageImage(page) {
+  if (!page) return null;
+  if (page.image) return page.image;
+  if (!page.hasImage) return null;
+  const rec = await unseal('pages', await getOne('pages', page.id));
+  return rec ? rec.image : null;
+}
+
+// Buch ver- oder entschlüsseln (alle Seiten, Abbildungen, Lesestände). Braucht den offenen Tresor.
+export async function setBookEncrypted(bookId, on, onProgress) {
+  const book = await getOne('books', bookId);
+  if (!book || !!book.enc === !!on) return;
+  if (!vault.isOpen()) throw new vault.LockedError();
+  if (on) { book.enc = true; await tx(['books'], 'readwrite', (t) => t.objectStore('books').put(book)); encCache.set(bookId, true); }
+  else encCache.set(bookId, false);
+  const pages = await getAll('pages', 'bookId', bookId);
+  let n = 0;
+  for (const raw of pages) {
+    const next = on ? await seal('pages', raw) : await unseal('pages', raw);
+    if (next !== raw) { delete next.hasImage; delete next.sealed; await tx(['pages'], 'readwrite', (t) => t.objectStore('pages').put(next)); }
+    onProgress && onProgress(++n / pages.length);
+  }
+  for (const raw of await getAll('figures', 'bookId', bookId)) {
+    const next = on ? await seal('figures', raw) : await unseal('figures', raw);
+    if (next !== raw) { delete next.sealed; await tx(['figures'], 'readwrite', (t) => t.objectStore('figures').put(next)); }
+  }
+  for (const raw of await getAll('states', 'bookId', bookId)) {
+    const next = on ? await seal('states', raw) : await unseal('states', raw);
+    if (next !== raw) { delete next.sealed; await tx(['states'], 'readwrite', (t) => t.objectStore('states').put(next)); }
+  }
+  if (!on) { const b = await getOne('books', bookId); delete b.enc; await tx(['books'], 'readwrite', (t) => t.objectStore('books').put(b)); }
+  emit('book', bookId);
+}
+
 // ---------- Löschmarkierungen (damit Löschen auch auf anderen Geräten ankommt) ----------
 
 const TOMB_KINDS = ['books', 'pages', 'profiles', 'figures', 'folders'];
@@ -182,6 +288,7 @@ export const getBook = (id) => getOne('books', id);
 
 // Unverändert speichern (für Sync & Import)
 export async function putBookRaw(book, { silent = false } = {}) {
+  encCache.set(book.id, !!book.enc);
   await tx(['books'], 'readwrite', (t) => t.objectStore('books').put(book));
   if (!silent) emit('book', book.id);
   return book;
@@ -206,6 +313,7 @@ export async function createBook({ title, author, cover }) {
 }
 
 export async function deleteBook(id) {
+  encCache.delete(id);
   await tx(['books', 'pages', 'states', 'meta', 'figures'], 'readwrite', async (t) => {
     t.objectStore('books').delete(id);
     const figKeys = await promisify(t.objectStore('figures').index('bookId').getAllKeys(id));
@@ -256,12 +364,13 @@ export async function updateBook(id, patch) {
 
 // ---------- Seiten ----------
 
-export const getPage = (id) => getOne('pages', id);
-export const getPagesOfBook = (bookId) => getAll('pages', 'bookId', bookId);
+export const getPage = async (id, opts) => unseal('pages', await getOne('pages', id), opts);
+// opts: { images: false } → Seitenfotos verschlüsselter Bücher nicht entschlüsseln (hasImage), { raw: true } → wie gespeichert
+export const getPagesOfBook = async (bookId, opts) => unsealAll('pages', await getAll('pages', 'bookId', bookId), opts);
 
-export async function getPagesMeta(bookId) {
+export async function getPagesMeta(bookId, opts) {
   // Alle Seiten eines Buchs, sortiert nach pageOrder
-  const [book, pages] = await Promise.all([getBook(bookId), getPagesOfBook(bookId)]);
+  const [book, pages] = await Promise.all([getBook(bookId), getPagesOfBook(bookId, opts)]);
   if (!book) return [];
   const byId = new Map(pages.map((p) => [p.id, p]));
   const ordered = book.pageOrder.map((id) => byId.get(id)).filter(Boolean);
@@ -285,8 +394,9 @@ export async function addPage(bookId, { image, thumb, ...extra }, atIndex = null
     updatedAt: now,
     ...extra,
   };
+  const rec = await seal('pages', page);
   await tx(['books', 'pages'], 'readwrite', async (t) => {
-    t.objectStore('pages').put(page);
+    t.objectStore('pages').put(rec);
     const store = t.objectStore('books');
     const book = await promisify(store.get(bookId));
     if (atIndex == null || atIndex >= book.pageOrder.length) book.pageOrder.push(page.id);
@@ -299,7 +409,9 @@ export async function addPage(bookId, { image, thumb, ...extra }, atIndex = null
 }
 
 export async function putPage(page, { silent = false } = {}) {
-  await tx(['pages'], 'readwrite', (t) => t.objectStore('pages').put(page));
+  const existing = page.hasImage && !page.image ? await getOne('pages', page.id) : null;
+  const rec = await seal('pages', page, existing);
+  await tx(['pages'], 'readwrite', (t) => t.objectStore('pages').put(rec));
   if (!silent) emit('page', page.id, page.bookId);
   return page;
 }
@@ -307,6 +419,19 @@ export async function putPage(page, { silent = false } = {}) {
 const SYNCED_PAGE_FIELDS = ['text', 'ocrStatus', 'confidence', 'printedNo', 'printedNoManual', 'paraY'];
 
 export async function updatePage(id, patch) {
+  const raw0 = await getOne('pages', id);
+  if (raw0 && (raw0.enc || await isEncBook(raw0.bookId))) {
+    // Verschlüsselt: lesen, ändern, neu verschlüsseln (Kryptografie geht nicht innerhalb einer Transaktion)
+    const page = await unseal('pages', raw0);
+    if (page.sealed) throw new vault.LockedError();
+    if (SYNCED_PAGE_FIELDS.some((k) => k in patch && JSON.stringify(patch[k]) !== JSON.stringify(page[k]))) page.updatedAt = Date.now();
+    if ('image' in patch && patch.image !== page.image) page.imageAt = Date.now();
+    Object.assign(page, patch);
+    const rec = await seal('pages', page);
+    await tx(['pages'], 'readwrite', (t) => t.objectStore('pages').put(rec));
+    emit('page', id, page.bookId);
+    return page;
+  }
   let updated = null;
   await tx(['pages'], 'readwrite', async (t) => {
     const store = t.objectStore('pages');
@@ -399,34 +524,35 @@ export async function deleteFolderRaw(id) {
 
 // ---------- Abbildungen ----------
 
-export const getFigure = (id) => getOne('figures', id);
-export const getFiguresOfBook = (bookId) => getAll('figures', 'bookId', bookId);
-export const getFiguresOfPage = (pageId) => getAll('figures', 'pageId', pageId);
+export const getFigure = async (id) => unseal('figures', await getOne('figures', id));
+export const getFiguresOfBook = async (bookId, opts) => unsealAll('figures', await getAll('figures', 'bookId', bookId), opts);
+export const getFiguresOfPage = async (pageId) => unsealAll('figures', await getAll('figures', 'pageId', pageId));
 
 export async function addFigure({ bookId, pageId, image, rect, w, h, caption = '', fullPage = false }) {
   const now = Date.now();
   const fig = { id: uid(), bookId, pageId, image, rect, w, h, caption, fullPage, createdAt: now, updatedAt: now };
-  await tx(['figures'], 'readwrite', (t) => t.objectStore('figures').put(fig));
+  const rec = await seal('figures', fig);
+  await tx(['figures'], 'readwrite', (t) => t.objectStore('figures').put(rec));
   emit('figure', fig.id, bookId);
   return fig;
 }
 
 export async function updateFigure(id, patch) {
-  let updated = null;
-  await tx(['figures'], 'readwrite', async (t) => {
-    const store = t.objectStore('figures');
-    const f = await promisify(store.get(id));
-    if (!f) return;
-    Object.assign(f, patch, { updatedAt: Date.now() });
-    store.put(f);
-    updated = f;
-  });
+  const raw = await getOne('figures', id);
+  if (!raw) return null;
+  const f = await unseal('figures', raw);
+  if (f.sealed) throw new vault.LockedError();
+  Object.assign(f, patch, { updatedAt: Date.now() });
+  const rec = await seal('figures', f);
+  await tx(['figures'], 'readwrite', (t) => t.objectStore('figures').put(rec));
+  const updated = f;
   if (updated) emit('figure', id, updated.bookId);
   return updated;
 }
 
 export async function putFigureRaw(fig, { silent = false } = {}) {
-  await tx(['figures'], 'readwrite', (t) => t.objectStore('figures').put(fig));
+  const rec = await seal('figures', fig);
+  await tx(['figures'], 'readwrite', (t) => t.objectStore('figures').put(rec));
   if (!silent) emit('figure', fig.id, fig.bookId);
 }
 
@@ -477,12 +603,34 @@ export async function deleteProfile(id, { tombstone = true } = {}) {
 // ---------- Lesestände (je Profil und Buch) ----------
 
 export const stateKey = (profileId, bookId) => profileId + '|' + bookId;
-export const getState = (profileId, bookId) => getOne('states', stateKey(profileId, bookId));
-export const getStatesOfProfile = (profileId) => getAll('states', 'profileId', profileId);
-export const getAllStates = () => getAll('states');
+export const getState = async (profileId, bookId) => unseal('states', await getOne('states', stateKey(profileId, bookId)));
+export const getStatesOfProfile = async (profileId, opts) => unsealAll('states', await getAll('states', 'profileId', profileId), opts);
+export const getAllStates = async (opts) => unsealAll('states', await getAll('states'), opts);
 
 // touch=false: Änderung zählt nicht als neuer Lesestand (z. B. nur „zuletzt geöffnet“)
 export async function updateState(profileId, bookId, patch, { touch = true } = {}) {
+  if (await isEncBook(bookId)) {
+    const key = stateKey(profileId, bookId);
+    const raw = await getOne('states', key);
+    // Ohne offenen Tresor nur unverschlüsselte Felder (Position, zuletzt geöffnet, Status) ändern
+    const p0 = typeof patch === 'function' ? null : patch;
+    const onlyPlain = p0 && Object.keys(p0).every((k) => !SECRET.states.includes(k));
+    if (raw && raw.enc && !vault.isOpen()) {
+      if (!onlyPlain) throw new vault.LockedError();
+      Object.assign(raw, p0);
+      if (touch) raw.updatedAt = Date.now();
+      await tx(['states'], 'readwrite', (t) => t.objectStore('states').put(raw));
+      emit('state', key, bookId);
+      return unseal('states', raw);
+    }
+    const s = raw ? await unseal('states', raw) : { key, profileId, bookId, position: null, bookmarks: [], lastOpenedAt: 0, updatedAt: 0 };
+    Object.assign(s, typeof patch === 'function' ? patch(s) : patch);
+    if (touch) s.updatedAt = Date.now();
+    const rec = await seal('states', s);
+    await tx(['states'], 'readwrite', (t) => t.objectStore('states').put(rec));
+    emit('state', key, bookId);
+    return s;
+  }
   let updated = null;
   await tx(['states'], 'readwrite', async (t) => {
     const store = t.objectStore('states');
@@ -498,7 +646,8 @@ export async function updateState(profileId, bookId, patch, { touch = true } = {
 }
 
 export async function putStateRaw(state, { silent = false } = {}) {
-  await tx(['states'], 'readwrite', (t) => t.objectStore('states').put(state));
+  const rec = await seal('states', state);
+  await tx(['states'], 'readwrite', (t) => t.objectStore('states').put(rec));
   if (!silent) emit('state', state.key, state.bookId);
 }
 

@@ -14,6 +14,16 @@ import { clientId, redirectUri } from './sync/oauth.js';
 import { checkPages, describe, orderByPrinted } from './pagecheck.js';
 import { stripMd } from './rich.js';
 import * as lock from './lock.js';
+import * as vault from './vault.js';
+
+// Darf ein Buch ohne Nachfrage gelesen werden? (gesperrt → entsperrt; verschlüsselt → Tresor offen)
+const canOpenBook = (b) => (b.enc && vault.isSetup() ? vault.isOpen() : !b.locked || lock.isUnlocked() || !lock.isConfigured());
+// Vor dem Sichern: verschlüsselte Bücher brauchen den offenen Tresor
+async function vaultForBackup(bookIds = null) {
+  const enc = (await db.getBooks()).filter((b) => b.enc && (!bookIds || bookIds.includes(b.id)));
+  if (!enc.length || vault.isOpen()) return true;
+  return lock.unlockVault('Gesperrte Bücher sind verschlüsselt. Zum Sichern bitte entsperren.');
+}
 import { searchLibrary, setJump } from './search.js';
 import { bookSize, shrinkPhotos, deletePhotos, fmtBytes } from './storage.js';
 import { getStats, dayKey } from './stats.js';
@@ -265,7 +275,7 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
     results.hidden = q.length < 2;
     if (q.length < 2) { results.replaceChildren(); return; }
     results.replaceChildren(h('p', { class: 'muted small' }, h('span', { class: 'spinner' }), ' Suche …'));
-    const found = await searchLibrary(q, { canOpen: (b) => !b.locked || lock.isUnlocked() || !lock.isConfigured() });
+    const found = await searchLibrary(q, { canOpen: canOpenBook });
     if (query.trim() !== q) return;
     if (!found.length) { results.replaceChildren(h('p', { class: 'muted' }, `Nichts gefunden für „${q}“.`)); return; }
     const total = found.reduce((s, r) => s + r.total, 0);
@@ -407,6 +417,7 @@ async function backupReminder() {
       : `Du hast ${pages} Seiten gescannt, aber noch keine Sicherung erstellt. Fotos liegen nur auf diesem Gerät.`),
     h('div', { class: 'row gap-s wrap' },
       h('button', { class: 'btn small primary', onClick: async () => {
+        if (!(await vaultForBackup())) return;
         const { exportBackup } = await import('./backup.js');
         toast('Sicherung wird erstellt …');
         const blob = await exportBackup();
@@ -656,7 +667,7 @@ async function renderBook(bookId) {
   async function fillHead() {
     book = await db.getBook(bookId);
     if (!book) { go('#/'); return; }
-    const pages = await db.getPagesMeta(bookId);
+    const pages = await db.getPagesMeta(bookId, { images: false });
     const state = await db.getState(profiles.currentId(), bookId);
     const done = pages.filter((p) => p.ocrStatus === 'done').length;
     const errs = pages.filter((p) => p.ocrStatus === 'error').length;
@@ -762,7 +773,7 @@ async function renderBook(bookId) {
     const items = [];
     if (folder) items.push(h('a', { class: 'tag-chip folder-chip', href: '#/ordner/' + folder.id }, icon('folder'), folder.name));
     for (const t of book.tags || []) items.push(h('a', { class: 'tag-chip', href: '#/tag/' + encodeURIComponent(t) }, '#' + t));
-    if (book.locked && lock.isConfigured()) items.push(h('span', { class: 'tag-chip' }, icon('lock'), 'gesperrt'));
+    if (book.locked && lock.isConfigured()) items.push(h('span', { class: 'tag-chip' }, icon('lock'), book.enc ? 'gesperrt · verschlüsselt' : 'gesperrt'));
     return items.length ? h('div', { class: 'tag-row' }, ...items) : null;
   }
 
@@ -796,6 +807,7 @@ async function renderBook(bookId) {
       h('button', { class: 'menu-item', onClick: () => { s.close(); go(`#/send/${bookId}`); } }, icon('wifi'), 'An eigenes Gerät senden (WLAN, ohne Internet)'),
       h('button', { class: 'menu-item', onClick: async () => {
         s.close();
+        if (!(await vaultForBackup([bookId]))) return;
         const { exportBackup } = await import('./backup.js');
         toast('Sicherung wird erstellt …');
         const blob = await exportBackup([bookId]);
@@ -867,6 +879,9 @@ async function renderBook(bookId) {
     const lockBox = lock.isConfigured() ? h('input', { type: 'checkbox', checked: !!book.locked }) : null;
     const s = sheet('Buch bearbeiten', h('form', { class: 'stack', onSubmit: async (e) => {
       e.preventDefault();
+      // Sperren/Entsperren ver- bzw. entschlüsselt das Buch → Tresor muss offen sein
+      if (lockBox && lockBox.checked !== !!book.locked && lock.vaultReady() && !lock.vaultOpen()
+        && !(await lock.unlockVault(lockBox.checked ? 'Zum Verschlüsseln des Buchs bitte entsperren.' : 'Zum Entschlüsseln bitte entsperren.'))) return;
       const { normalizeIsbn } = await import('./barcode.js');
       const isbnVal = isbnIn.value.trim() ? normalizeIsbn(isbnIn.value) : null;
       if (isbnIn.value.trim() && !isbnVal) { toast('Die ISBN ist ungültig'); isbnIn.focus(); return; }
@@ -876,6 +891,7 @@ async function renderBook(bookId) {
         folderId: folderSel.value || null, tags: tagsEl.value(), locked: lockBox ? lockBox.checked : !!book.locked,
       });
       s.close();
+      if (lockBox) { await lock.reconcile(); if (lockBox.checked && lock.vaultReady()) toast('Buch gesperrt und verschlüsselt'); }
     } },
       h('button', { type: 'button', class: 'cover-pick-btn', onClick: async () => {
         const [f] = await pickFiles({ multiple: false, capture: 'environment' });
@@ -909,7 +925,7 @@ async function renderBook(bookId) {
       h('label', { class: 'stack-s small' }, h('strong', {}, 'Ordner'), folderSel),
       h('div', { class: 'stack-s small' }, h('strong', {}, 'Tags'), tagsEl),
       lockBox
-        ? h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Buch sperren'), h('br'), h('span', { class: 'muted small' }, 'Öffnen nur mit Face ID oder PIN')), lockBox)
+        ? h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Buch sperren'), h('br'), h('span', { class: 'muted small' }, 'Öffnen nur mit Face ID oder PIN. Texte, Fotos und Markierungen werden auf diesem Gerät verschlüsselt gespeichert.')), lockBox)
         : h('p', { class: 'muted small' }, 'Bücher sperren: zuerst unter Einstellungen → App-Sperre Face ID bzw. eine PIN einrichten.'),
       h('button', { class: 'btn primary block', type: 'submit' }, 'Speichern'),
     ), { onClose: () => p2.clear() });
@@ -966,6 +982,7 @@ async function openSettings() {
       h('p', { class: 'muted small' }, 'Alle Bücher inklusive Fotos als Datei speichern, z. B. für ein neues Handy oder als Backup in der Cloud.'),
       h('div', { class: 'row gap-s wrap' },
         h('button', { class: 'btn small', onClick: async () => {
+          if (!(await vaultForBackup())) return;
           const { exportBackup } = await import('./backup.js');
           toast('Sicherung wird erstellt …');
           const blob = await exportBackup();
@@ -1002,6 +1019,9 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   try {
     await profiles.ensureProfile();
     lock.init();
+    // Tresor geöffnet → gesperrte Bücher (ent)schlüsseln, wartende Texterkennung und Sync nachholen
+    vault.onChange((open) => { if (open) { lock.reconcile().then(() => { ocr.resume(); sync.syncNow(); }); } });
+    db.onChange((e) => { if (e.type === 'sync' && vault.isOpen()) lock.reconcile(); });
     await sync.init(); // verarbeitet ggf. die Rückkehr von der Anmeldeseite
   } catch (e) {
     console.error(e);
@@ -1179,10 +1199,15 @@ async function lockCard() {
       h('div', { class: 'row gap-s wrap' },
         h('button', { class: 'btn small', onClick: () => lock.lockNow() }, 'Jetzt sperren'),
         h('button', { class: 'btn small', onClick: async () => {
-          if (!(await lock.lockNow('Zum Ausschalten bitte bestätigen.'))) return;
-          lock.disable(); render(); toast('App-Sperre ausgeschaltet');
+          if (!(await lock.lockNow('Zum Ausschalten bitte bestätigen.', { needVault: lock.vaultReady() }))) return;
+          if (await lock.disable()) { render(); toast('App-Sperre ausgeschaltet'); }
         } }, 'Ausschalten')),
-      h('p', { class: 'muted small' }, 'Hinweis: Die Sperre schützt vor neugierigen Blicken. Sie verschlüsselt die Daten im Browser-Speicher nicht.'),
+      lock.vaultReady()
+        ? h('p', { class: 'muted small' }, icon('lock'), ' Gesperrte Bücher werden auf diesem Gerät verschlüsselt gespeichert (AES-256). ',
+          lock.hasBiometrics() && !lock.faceIdOpensVault() ? 'Face ID entsperrt auf diesem Gerät nur die Ansicht – für verschlüsselte Bücher wird die PIN gebraucht.' : lock.hasBiometrics() ? 'Face ID öffnet auch die verschlüsselten Bücher.' : '')
+        : h('div', { class: 'stack-s' }, h('p', { class: 'muted small' }, 'Neu: Gesperrte Bücher können verschlüsselt gespeichert werden. Dazu einmal mit der PIN entsperren.'),
+          h('button', { class: 'btn small', onClick: async () => { if (await lock.unlockVault('Bitte PIN eingeben, um die Verschlüsselung einzurichten.')) { render(); toast('Verschlüsselung eingerichtet'); } } }, icon('lock'), 'Verschlüsselung einrichten')),
+      h('p', { class: 'muted small' }, 'Die Sperre der ganzen App schützt vor neugierigen Blicken; verschlüsselt werden die als „gesperrt“ markierten Bücher.'),
     );
   };
   const setupDialog = () => {

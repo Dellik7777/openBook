@@ -20,6 +20,7 @@ import { google } from './google.js';
 import { onedrive } from './onedrive.js';
 import { AuthError, ConflictError, takePending } from './oauth.js';
 import * as stats from '../stats.js';
+import * as vault from '../vault.js';
 import { mergeCards } from '../cards.js';
 
 const PHOTOS_PER_RUN = 40; // Fotos je Durchgang (der Rest folgt im nächsten)
@@ -244,8 +245,11 @@ async function runOnce() {
     }
 
     // 5) Seitentexte je Buch
+    // Verschlüsselte Bücher bei geschlossenem Tresor auslassen (werden nach dem Entsperren abgeglichen)
     const books = await db.getBooks();
+    const sealedIds = new Set(books.filter((b) => b.enc && !vault.isOpen()).map((b) => b.id));
     for (const book of books) {
+      if (sealedIds.has(book.id)) continue;
       const rb = (lib.books || {})[book.id];
       const remoteV = rb ? rb.contentV || 0 : 0;
       if (rb && remoteV > (seen[book.id] || 0)) {
@@ -275,7 +279,7 @@ async function runOnce() {
     const profileIds = new Set((await db.getProfiles()).map((p) => p.id));
     const bookIds = new Set((await db.getBooks()).map((b) => b.id));
     for (const [key, rs] of Object.entries(lib.states || {})) {
-      if (!profileIds.has(rs.profileId) || !bookIds.has(rs.bookId)) continue;
+      if (!profileIds.has(rs.profileId) || !bookIds.has(rs.bookId) || sealedIds.has(rs.bookId)) continue;
       const ls = localStates.get(key);
       // Markierungen beider Seiten zusammenführen (sonst ginge eine auf dem anderen Gerät verloren)
       const mergedHl = mergeHighlights(ls && ls.highlights, rs.highlights);
@@ -301,7 +305,7 @@ async function runOnce() {
     }
 
     // 8) Neue library.json aus dem zusammengeführten Stand
-    const next = await buildLibrary(imgsV, lib);
+    const next = await buildLibrary(imgsV, lib, sealedIds);
     if (stableStringify(strip(next)) !== stableStringify(strip(lib))) {
       next.updatedAt = Date.now();
       await provider.write(LIB, JSON.stringify(next), 'application/json', { ifVersion: remote ? remote.version : null });
@@ -421,9 +425,9 @@ async function adoptRemoteProfiles(remoteProfiles, tomb) {
     if (!rp) continue;
     await db.putProfile({ ...rp }, { raw: true, silent: true });
     // Lesestände des lokalen Profils übernehmen
-    for (const st of await db.getStatesOfProfile(lp.id)) {
+    for (const st of await db.getStatesOfProfile(lp.id, { raw: true })) {
       const key = db.stateKey(rp.id, st.bookId);
-      const existing = (await db.getAllStates()).find((x) => x.key === key);
+      const existing = (await db.getAllStates({ raw: true })).find((x) => x.key === key);
       if (!existing || (st.updatedAt || 0) > (existing.updatedAt || 0)) await db.putStateRaw({ ...st, key, profileId: rp.id }, { silent: true });
     }
     if (profiles.currentId() === lp.id) await profiles.switchTo(rp.id);
@@ -457,7 +461,7 @@ async function downloadCover(coverId) {
   }
 }
 
-async function buildLibrary(imgsV = {}, prev = null) {
+async function buildLibrary(imgsV = {}, prev = null, sealedIds = new Set()) {
   const lib = emptyLib();
   for (const p of await db.getProfiles()) lib.profiles[p.id] = p;
   for (const f of await db.getFolders()) lib.folders[f.id] = f;
@@ -465,12 +469,16 @@ async function buildLibrary(imgsV = {}, prev = null) {
     lib.books[b.id] = {
       id: b.id, title: b.title, author: b.author || '', coverId: b.cover ? b.coverId : null, ignoredGaps: b.ignoredGaps || [],
       folderId: b.folderId || null, tags: b.tags || [], locked: !!b.locked, isbn: b.isbn || null, source: b.source || null,
-      createdAt: b.createdAt, metaAt: b.metaAt || 0, contentV: await contentVersion(b.id),
+      createdAt: b.createdAt, metaAt: b.metaAt || 0,
+      // Verschlüsselt und gesperrt: Inhalt wurde nicht abgeglichen → Stand aus der Cloud übernehmen
+      contentV: sealedIds.has(b.id) ? ((prev && prev.books && prev.books[b.id] && prev.books[b.id].contentV) || 0) : await contentVersion(b.id),
       imgsV: Math.max(imgsV[b.id] || 0, (prev && prev.books && prev.books[b.id] && prev.books[b.id].imgsV) || 0) || undefined,
     };
   }
   for (const s of await db.getAllStates()) {
-    if (lib.profiles[s.profileId] && lib.books[s.bookId]) lib.states[s.key] = s;
+    if (!lib.profiles[s.profileId] || !lib.books[s.bookId]) continue;
+    if (sealedIds.has(s.bookId)) { if (prev && prev.states && prev.states[s.key]) lib.states[s.key] = prev.states[s.key]; continue; }
+    lib.states[s.key] = s;
   }
   lib.tombstones = await db.getTombstones();
   return lib;
@@ -481,8 +489,8 @@ async function contentVersion(bookId) {
   const book = await db.getBook(bookId);
   if (!book) return 0;
   let v = book.orderAt || 0;
-  for (const p of await db.getPagesOfBook(bookId)) v = Math.max(v, p.updatedAt || 0);
-  for (const f of await db.getFiguresOfBook(bookId)) v = Math.max(v, f.updatedAt || 0);
+  for (const p of await db.getPagesOfBook(bookId, { raw: true })) v = Math.max(v, p.updatedAt || 0);
+  for (const f of await db.getFiguresOfBook(bookId, { raw: true })) v = Math.max(v, f.updatedAt || 0);
   const tomb = await db.getTombstones();
   for (const t of Object.values(tomb.pages)) if (t.bookId === bookId) v = Math.max(v, t.at);
   for (const t of Object.values(tomb.figures)) if (t.bookId === bookId) v = Math.max(v, t.at);

@@ -18,7 +18,7 @@ export async function searchLibrary(query, { canOpen = () => true, maxPerBook = 
     if (!canOpen(book)) continue;
     const meta = fold([book.title, book.author, ...(book.tags || [])].join(' '));
     const titleHit = meta.includes(q);
-    const pages = await db.getPagesMeta(book.id);
+    const pages = await db.getPagesMeta(book.id, { images: false });
     const hits = [];
     let total = 0;
     pages.forEach((page, pageIndex) => {

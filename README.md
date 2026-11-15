@@ -18,6 +18,7 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Qualitätscheck** direkt nach dem Foto (unscharf, zu dunkel) mit „Nochmal“
 - **Seitenprüfung:** Lesepixel liest die gedruckten Seitenzahlen mit und meldet sofort, wenn eine Seite fehlt, doppelt ist oder in falscher Reihenfolge liegt. Mit „Nachscannen“ wird die fehlende Seite an der richtigen Stelle eingefügt, mit „Passt so“ wird der Hinweis ausgeblendet
 - **Abbildungs-Modus:** Karten, Bilder und Diagramme in Farbe als ganze Seite fotografieren
+- **Galerie-Fotos nach Seitenzahl ordnen:** durcheinander importierte Seiten mit einem Tipp in die richtige Reihenfolge bringen (mit „Rückgängig“)
 
 **Texterkennung (OCR)**
 - Tesseract läuft komplett im Browser (Deutsch + Englisch), auch offline
@@ -25,6 +26,8 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - Repariert Silbentrennung am Zeilenende, entfernt Seitenzahlen und Kolumnentitel und verbindet Absätze über Seitengrenzen
 - **Erhält die Formatierung:** Überschriften, Aufzählungen mit Ebenen, nummerierte Listen, **fett** und *kursiv* (eigene Bildanalyse von Strichstärke und Schräglage)
 - **Schatten-Entfernung:** Schatten von Hand oder Handy, Falten und ungleichmäßiges Licht werden vor der Erkennung herausgerechnet
+- **Tabellen** werden als echte Tabellen erkannt (Spalten aus der Lage der Wörter, Kopfzeile)
+- **Fußnoten** unten auf der Seite werden erkannt; die hochgestellten Verweise im Text lassen sich antippen
 
 **Lesen wie auf einem E-Book-Reader**
 - Echter Seitenumbruch statt Scrollen: rechts tippen = weiter, links = zurück, Mitte = Menü, Wischen geht auch
@@ -37,7 +40,13 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Inhaltsverzeichnis** aus den erkannten Überschriften, „Noch X Min. im Kapitel“
 - **Markieren und Notizen** in vier Farben, Liste aller Markierungen, Export als Markdown
 - **Zwei Spalten im Querformat** auf dem Tablet
-- **Lesestatistik:** Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher
+- **Lesestatistik:** Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher – mit Sync über alle Geräte zusammengezählt
+- **Tagesziel** (z. B. 20 Minuten) mit Fortschritt in der Bibliothek
+- **Wort nachschlagen:** markieren → Wikipedia-Kurzartikel, Links zu Duden, DWDS, Wiktionary und DeepL
+- **Lernkarten aus Markierungen:** Lückentext oder Frage (Notiz mit „?“), Wiederholung nach dem Karteikasten-Prinzip
+- **Schlaf-Timer** beim Vorlesen (5–60 Minuten oder bis Kapitelende)
+- **Fußnoten antippen** zeigt den Fußnotentext, **Tabellen** werden als Tabellen dargestellt
+- Abbildungen mit zwei Fingern **zoomen** und verschieben
 - **Abbildungen im Text:** markierte Bilder, Karten und Diagramme stehen an der richtigen Stelle im Lesefluss, mit Bildunterschrift; antippen zum Vergrößern
 - Fußzeile mit den echten Seitenzahlen des gedruckten Buchs
 - Originalfoto-Ansicht mit Zoom, z. B. für Tabellen oder Formeln
@@ -45,7 +54,8 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 
 **Leseprofile & Synchronisierung**
 - Mehrere **Leseprofile** (z. B. für die Familie): jedes mit eigener Leseposition, eigenen Lesezeichen und Schrifteinstellungen
-- **Sync über Google Drive oder OneDrive**: Texte, Profile, Lesepositionen, Lesezeichen und Cover auf allen Geräten, ohne eigenen Server (Fotos bleiben lokal). Einrichtung: siehe **[SYNC.md](SYNC.md)**
+- **Sync über Google Drive oder OneDrive**: Texte, Profile, Lesepositionen, Lesezeichen, Markierungen, Lernkarten, Lesestatistik und Cover auf allen Geräten, ohne eigenen Server. Einrichtung: siehe **[SYNC.md](SYNC.md)**
+- **Fotos mitsichern** (optional): Seitenfotos zusätzlich in der Cloud – als Sicherung und für die Originalansicht auf anderen Geräten
 - Auf einem anderen Gerät weitergelesen? Lesepixel springt an die neueste Stelle
 
 **Buch an eigenes Gerät senden (ohne Internet)**
@@ -55,9 +65,13 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 
 **Verwalten**
 - Bibliothek mit Covern (Foto oder automatisch erzeugt) und Lesefortschritt
+- **Buch per ISBN anlegen:** Strichcode scannen (eigener Leser, klappt auch in Safari), Titel, Autor und Cover werden nachgeschlagen
+- **PDF und EPUB importieren:** PDFs mit Textebene ohne Texterkennung, gescannte PDFs werden erkannt; EPUBs mit Kapiteln, Bildern, Tabellen und Fußnoten (ohne DRM)
+- **Lesestatus** „Will ich lesen“, „Lese ich“, „Gelesen“ mit Filter – „Gelesen“ automatisch am Buchende
 - **Ordner** (auch verschachtelt) und **Tags**, Filter nach Tag
 - **Suche über alle Bücher** (Titel, Autor, Tags, Text) – ein Treffer öffnet den Leser an der Stelle
 - **App-Sperre mit Face ID / Touch ID** und PIN, wahlweise für die ganze App oder einzelne Bücher
+- **Gesperrte Bücher werden verschlüsselt** (AES-256-GCM): Texte, Fotos, Abbildungen, Markierungen und Lesezeichen liegen nur verschlüsselt im Speicher. Den Schlüssel öffnet die PIN – und Face ID, wenn das Gerät die WebAuthn-Erweiterung PRF kann (iOS 18, aktuelle Android-Geräte)
 - **Erinnerung an die Sicherung** und **Speicher sparen** (Fotos verkleinern oder löschen, Text bleibt)
 - Unsicher erkannte Wörter werden im Editor zum Prüfen angeboten
 - Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen, Seitenzahl korrigieren, **Abbildungen markieren** (Beschriftungen in der Abbildung landen dann nicht im Lesetext)
@@ -140,6 +154,12 @@ js/storage.js         Speicher sparen
 js/stats.js, statsview.js  Lesestatistik
 js/pagedetect.js      Seitenerkennung, Entzerrung, Wölbung, Qualität, Bewegung
 js/pdf.js             Durchsuchbares PDF (eigener PDF-Schreiber)
+js/barcode.js, isbn.js  ISBN-Strichcode lesen, Buchdaten nachschlagen
+js/importer.js        PDF- und EPUB-Import
+js/vault.js           Verschlüsselung gesperrter Bücher (Tresor)
+js/cards.js, cardsview.js  Lernkarten
+js/lookup.js          Wort nachschlagen
+js/zoom.js            Zoomen mit zwei Fingern
 js/legal.js           Angaben zum Anbieter (Impressum/Datenschutz)
 js/legalview.js       Seite „Rechtliches“
 vendor/               Tesseract, Sprachdaten, JSZip, QR-Codes, Literata, Montserrat (siehe vendor/README.md)

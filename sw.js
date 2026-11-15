@@ -45,6 +45,7 @@ const SHELL_FILES = [
   'js/lookup.js',
   'js/cards.js',
   'js/cardsview.js',
+  'js/vault.js',
   'js/config.js',
   'js/sync/sync.js',
   'js/sync/oauth.js',

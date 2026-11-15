@@ -1,6 +1,8 @@
 # Synchronisierung einrichten
 
-Lesepixel gleicht **Texte, Lesepositionen, Lesezeichen, Profile, Cover und markierte Abbildungen** über deinen eigenen Cloud-Speicher ab. Es gibt keinen Server und kein Lesepixel-Konto. **Fotos der Seiten werden nie hochgeladen**, sie bleiben auf dem Gerät, mit dem du gescannt hast.
+Lesepixel gleicht **Texte, Lesepositionen, Lesezeichen, Markierungen, Lernkarten, Lesestatistik, Profile, Cover und markierte Abbildungen** über deinen eigenen Cloud-Speicher ab. Es gibt keinen Server und kein Lesepixel-Konto. **Fotos der Seiten werden nur hochgeladen, wenn du „Fotos mitsichern“ einschaltest** (Einstellungen → Synchronisierung); sonst bleiben sie auf dem Gerät, mit dem du gescannt hast.
+
+Verschlüsselte (gesperrte) Bücher werden nur abgeglichen, solange sie auf dem Gerät entsperrt sind. In der Cloud liegen ihre Texte wie bei allen Büchern in deinem eigenen, durch dein Konto geschützten Speicher; ihre Fotos werden nie hochgeladen.
 
 Damit Lesepixel auf deinen Google Drive oder dein OneDrive zugreifen darf, brauchst du **einmalig eine „Client-ID“**. Das ist eine Art App-Kennung, die du kostenlos in deinem eigenen Google- bzw. Microsoft-Konto anlegst. Sie ist nicht geheim und kommt in `js/config.js`.
 

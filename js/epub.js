@@ -11,7 +11,7 @@ const PAGES_PER_FILE = 20;
 export async function exportEpub(bookId) {
   const JSZip = await loadJSZip();
   const book = await db.getBook(bookId);
-  const pages = await db.getPagesMeta(bookId);
+  const pages = await db.getPagesMeta(bookId, { images: false });
   const figMap = new Map();
   for (const f of await db.getFiguresOfBook(bookId)) {
     if (!figMap.has(f.pageId)) figMap.set(f.pageId, []);
