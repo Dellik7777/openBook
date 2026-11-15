@@ -4,6 +4,7 @@
 
 import * as db from './db.js';
 import { analyzeOcr } from './textproc.js';
+import { grayImage, detectStyles } from './fontstyle.js';
 
 const base = new URL('../vendor/tesseract/', import.meta.url).href;
 const LANGS = 'deu+eng';
@@ -119,8 +120,9 @@ async function runOn(w) {
         // Ganze Seite ist eine Abbildung → kein Text
         await db.updatePage(pageId, { text: '', ocrStatus: 'done', paraY: [] });
       } else {
-        const { input, height } = await prepareImage(page.image, figures);
+        const { input, height, gray } = await prepareImage(page.image, figures);
         const { data } = await w.worker.recognize(input, {}, { blocks: true, text: true });
+        markStyles(data, gray);
         const res = analyzeOcr(data, { height });
         const patch = {
           text: res.paras.join('\n\n'),
@@ -154,23 +156,48 @@ export function isQueued(pageId) {
   return queue.includes(pageId) || active.has(pageId);
 }
 
-// Bildgröße ermitteln und markierte Abbildungen weiß übermalen,
-// damit deren Beschriftungen nicht im Lesetext landen.
+// Bildgröße ermitteln, Graustufenbild für die Fett/Kursiv-Erkennung erzeugen
+// und markierte Abbildungen weiß übermalen, damit deren Beschriftungen nicht im Lesetext landen.
 async function prepareImage(blob, figures) {
   let bmp = null;
-  try { bmp = await createImageBitmap(blob); } catch (e) { return { input: blob, height: 0 }; }
-  const height = bmp.height;
-  if (!figures.length) { bmp.close && bmp.close(); return { input: blob, height }; }
+  try { bmp = await createImageBitmap(blob); } catch (e) { return { input: blob, height: 0, gray: null }; }
+  const { width, height } = bmp;
   const c = document.createElement('canvas');
-  c.width = bmp.width; c.height = bmp.height;
+  c.width = width; c.height = height;
   const ctx = c.getContext('2d');
   ctx.drawImage(bmp, 0, 0);
+  bmp.close && bmp.close();
   ctx.fillStyle = '#fff';
   for (const f of figures) {
     const r = f.rect;
-    ctx.fillRect(r.x * c.width, r.y * c.height, r.w * c.width, r.h * c.height);
+    ctx.fillRect(r.x * width, r.y * height, r.w * width, r.h * height);
   }
-  bmp.close && bmp.close();
-  const input = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
-  return { input, height };
+  let gray = null;
+  try { gray = grayImage(c, width, height); } catch (e) { console.warn('Stil-Erkennung nicht möglich', e); }
+  const input = figures.length ? await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9)) : blob;
+  return { input, height, gray };
+}
+
+// Fett/kursiv je Wort bestimmen (setzt word.bold / word.italic im OCR-Ergebnis)
+function markStyles(data, gray) {
+  if (!gray) return;
+  const words = [];
+  let lineId = 0;
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        lineId++;
+        const lineH = line.bbox ? line.bbox.y1 - line.bbox.y0 : 0;
+        for (const wd of line.words || []) {
+          if (!wd.bbox || !wd.text) continue;
+          wd.lineH = lineH; wd.lineId = lineId;
+          words.push(wd);
+        }
+      }
+    }
+  }
+  let debug = null;
+  try { if (localStorage.getItem('ob.debug')) debug = []; } catch (e) { /* ignorieren */ }
+  try { detectStyles(gray, words, 1, debug); } catch (e) { console.warn('Stil-Erkennung fehlgeschlagen', e); }
+  if (debug) window.__obStyleDebug = debug;
 }

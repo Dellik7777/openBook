@@ -18,10 +18,13 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines B
 - Tesseract läuft komplett im Browser (Deutsch + Englisch), auch offline
 - Läuft im Hintergrund weiter, während du scannst; wird nach einem Neustart fortgesetzt
 - Repariert Silbentrennung am Zeilenende, entfernt Seitenzahlen und Kolumnentitel und verbindet Absätze über Seitengrenzen
+- **Erhält die Formatierung:** Überschriften, Aufzählungen mit Ebenen, nummerierte Listen, **fett** und *kursiv* (eigene Bildanalyse von Strichstärke und Schräglage)
+- **Schatten-Entfernung:** Schatten von Hand oder Handy, Falten und ungleichmäßiges Licht werden vor der Erkennung herausgerechnet
 
 **Lesen wie auf einem Kindle**
 - Echter Seitenumbruch statt Scrollen: rechts tippen = weiter, links = zurück, Mitte = Menü, Wischen geht auch
 - Schriftgröße, Schriftart (Literata, Georgia, Sans, Weit), Zeilenabstand, Ränder, Blocksatz mit Silbentrennung
+- Absätze mit Einzug (Roman) oder Abstand (Fachtext), automatisch passend zum Inhalt
 - Hintergründe: Weiß, Papier, Sepia, Dunkel, Schwarz
 - Fußzeile mit Buchseite und Prozent oder verbleibender Lesezeit (antippen zum Umschalten)
 - Lesezeichen, Volltextsuche, Seitenübersicht, Schieberegler
@@ -93,6 +96,8 @@ js/pageeditor.js      Seiten bearbeiten
 js/ocr.js             OCR-Warteschlange (Tesseract.js, Web Worker)
 js/textproc.js        OCR → Absätze, Seitenzahlen, Kolumnentitel, Abbildungen im Lesefluss
 js/pagecheck.js       Seitenprüfung (fehlende/doppelte/vertauschte Seiten)
+js/fontstyle.js       Fett/kursiv aus den Bildpunkten erkennen
+js/rich.js            Formatierung (Überschriften, Listen, fett/kursiv) als einfache Auszeichnung
 js/imageproc.js       Skalieren, Scan-Filter, Teilen, Drehen, Zuschneiden
 js/db.js              IndexedDB
 js/epub.js            EPUB-3-Export

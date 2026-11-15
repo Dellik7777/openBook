@@ -1,5 +1,7 @@
 // Aufbereitung des OCR-Ergebnisses zu fließendem Lesetext.
 
+import { parseBlock, plainInline, styledWords, escapeMd } from './rich.js';
+
 const HYPHENS = /[-­‐‑¬]$/;
 const TERMINAL = /[.!?…:;"“”„»«'’)\]]$/;
 
@@ -62,7 +64,10 @@ function findPageNumber(lines, height) {
     return (!atTop || below) && (!atBottom || above);
   };
   const cands = [];
+  const edge = height ? height * 0.012 : 0;
   for (const l of lines) {
+    // Am Bildrand abgeschnittene Zeilen (z. B. halb fotografierte Nachbarseite) ignorieren
+    if (height && (l.y0 < edge || l.y1 > height - edge)) continue;
     const atTop = l.y0 <= top + zone;
     const atBottom = l.y1 >= bottom - zone;
     if (!atTop && !atBottom) continue;
@@ -81,53 +86,189 @@ function findPageNumber(lines, height) {
   return { n: c.n, lines: valid.filter((x) => x.n === c.n).map((x) => x.line.ref) };
 }
 
-// Vollständige Auswertung: Absätze, Lage der Absätze auf der Seite (0..1), gedruckte Seitenzahl.
+// Vollständige Auswertung: Absätze mit Struktur (Überschriften, Aufzählungen, fett/kursiv),
+// Lage der Absätze auf der Seite (0..1) und gedruckte Seitenzahl.
 // Kopf-/Fußzeile mit der Seitenzahl wird aus dem Lesetext entfernt.
+// Wörter dürfen bold/italic tragen (siehe fontstyle.js) – dann wird **fett**/*kursiv* gesetzt.
 export function analyzeOcr(data, { height = 0 } = {}) {
-  const blocks = data.blocks || [];
-  const lines = [];
-  for (const block of blocks) {
-    for (const para of block.paragraphs || []) {
-      for (const line of para.lines || []) {
-        const text = cleanLine(line.text || '');
-        if (!text || !line.bbox) continue;
-        lines.push({ text, y0: line.bbox.y0, y1: line.bbox.y1, conf: line.confidence, ref: line });
-      }
-    }
-  }
+  const lines = collectLines(data);
   const H = height || Math.max(1, ...lines.map((l) => l.y1));
   const pn = findPageNumber(lines, height);
   const drop = new Set(pn ? pn.lines : []);
+  // Am Bildrand abgeschnittene Zeilen sind unvollständig (Nachbarseite, Kopfzeile halb im Bild)
+  const edge = height ? height * 0.012 : -1;
+  const body = lines.filter((l) => !drop.has(l.ref) && !(height && (l.y0 < edge || l.y1 > height - edge)));
 
-  const paras = [];
-  for (const block of blocks) {
-    for (const para of block.paragraphs || []) {
-      let acc = '';
-      let y = null;
-      const conf = para.confidence ?? 100;
-      for (const line of para.lines || []) {
-        if (drop.has(line)) continue;
-        const lt = cleanLine(line.text || '');
-        if (!lt) continue;
-        if (y == null && line.bbox) y = line.bbox.y0 / H;
-        acc = joinLine(acc, lt);
-      }
-      acc = acc.trim();
-      if (!acc || isNoise(acc)) continue;
-      if (conf < 35 && acc.length < 25) continue; // Bildrauschen, Fussel
-      paras.push({ text: acc, y: y ?? 0 });
+  if (!body.length) {
+    if (!lines.length && data.text) {
+      const plain = paragraphsFromPlain(data.text);
+      return { paras: plain.map(escapeMd), paraY: plain.map((_, i) => (i + 0.5) / plain.length), printedNo: null };
     }
+    return { paras: [], paraY: [], printedNo: pn ? pn.n : null };
   }
-  if (!paras.length && data.text && !lines.length) {
-    const plain = paragraphsFromPlain(data.text);
-    return { paras: plain, paraY: plain.map((_, i) => (i + 0.5) / plain.length), printedNo: null };
+
+  const blocks = buildBlocks(body);
+  const paras = [];
+  for (const b of blocks) {
+    const plain = plainInline(b.md).trim();
+    if (!plain || isNoise(plain)) continue;
+    if (b.conf < 35 && plain.length < 25) continue; // Bildrauschen, Fussel
+    paras.push({ ...b, y: b.y / H });
   }
   const merged = mergeBroken(paras);
   return {
-    paras: merged.map((p) => p.text),
+    paras: merged.map(blockToMd),
     paraY: merged.map((p) => Math.round(p.y * 1000) / 1000),
     printedNo: pn ? pn.n : null,
   };
+}
+
+function collectLines(data) {
+  const lines = [];
+  let paraId = 0, lineId = 0;
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      paraId++;
+      for (const line of para.lines || []) {
+        const text = cleanLine(line.text || '');
+        if (!text || !line.bbox) continue;
+        lineId++;
+        let words = (line.words || []).filter((w) => w.text && w.text.trim() && w.bbox)
+          .map((w) => ({ text: w.text.trim(), bbox: w.bbox, bold: !!w.bold, italic: !!w.italic, conf: w.confidence ?? 90 }));
+        // Störzeichen (z. B. durchscheinende Rückseite): sehr unsicher erkannte, kurze Wörter am Zeilenende
+        while (words.length > 1 && words[words.length - 1].conf < 35 && words[words.length - 1].text.length <= 2) words.pop();
+        words = words.filter((w) => w.conf >= 20 || w.text.length > 3);
+        if (!words.length) continue;
+        const wh = words.map((w) => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+        lines.push({
+          text, words, wordH: wh[Math.floor(wh.length / 2)] || (line.bbox.y1 - line.bbox.y0),
+          x0: line.bbox.x0, x1: line.bbox.x1, y0: line.bbox.y0, y1: line.bbox.y1,
+          conf: line.confidence, paraId, lineId, ref: line,
+        });
+      }
+    }
+  }
+  return lines;
+}
+
+// Aufzählungszeichen, wie die OCR sie liest (o, ©, ° für Kreise, ■ ▪ für Quadrate …)
+const BULLET = /^([-–—•▪■□◦○●°·*o©¢»>=])$/;
+const ORDERED = /^((?:\d{1,3}|[a-zA-Z])[.)])$/;
+
+function median(arr) {
+  const a = [...arr].sort((x, y) => x - y);
+  return a.length ? a[Math.floor(a.length / 2)] : 0;
+}
+
+function buildBlocks(lines) {
+  const lineH = median(lines.map((l) => l.y1 - l.y0)) || 20;
+  const wordH = median(lines.map((l) => l.wordH)) || lineH;
+  const left = Math.min(...lines.map((l) => l.x0));
+  const width = Math.max(1, Math.max(...lines.map((l) => l.x1)) - left);
+
+  // 1) Aufzählungszeilen erkennen
+  for (const l of lines) {
+    const [w0, w1] = l.words;
+    if (!w1) continue;
+    const t = w0.text;
+    const narrow = (w0.bbox.x1 - w0.bbox.x0) < lineH * 1.2;
+    if (BULLET.test(t) && narrow && !(t === 'o' && /^[a-zäöüß]/.test(w1.text))) {
+      l.bullet = { ordered: false, x: w0.bbox.x0, textX: w1.bbox.x0, skip: 1 };
+    } else if (ORDERED.test(t) && (w1.bbox.x0 - w0.bbox.x1) > lineH * 0.25) {
+      l.bullet = { ordered: true, x: w0.bbox.x0, textX: w1.bbox.x0, skip: 0, marker: t };
+    }
+  }
+  // 2) Ebenen über die Einrückung der Aufzählungszeichen
+  const xs = [...new Set(lines.filter((l) => l.bullet).map((l) => l.bullet.x))].sort((a, b) => a - b);
+  const levels = [];
+  for (const x of xs) {
+    if (!levels.length || x - levels[levels.length - 1] > Math.max(lineH * 1.2, width * 0.025)) levels.push(x);
+  }
+  const levelOf = (x) => {
+    let lv = 0;
+    levels.forEach((lx, i) => { if (x >= lx - Math.max(lineH * 0.6, width * 0.012)) lv = i; });
+    return lv;
+  };
+  // Liegt die erste Ebene deutlich rechts vom Textrand, ist sie trotzdem Ebene 0.
+
+  // 3) Zeilen zu Blöcken zusammenfassen
+  const blocks = [];
+  let cur = null, prev = null;
+  const push = () => { if (cur) blocks.push(cur); cur = null; };
+  for (const l of lines) {
+    const gap = prev ? l.y0 - prev.y1 : 0;
+    const words = l.bullet ? l.words.slice(l.bullet.skip) : l.words;
+    const md = styledWords(words);
+    const conf = l.words.reduce((s, w) => s + (w.conf ?? 90), 0) / l.words.length;
+    const allBold = words.every((w) => w.bold);
+    if (l.bullet) {
+      push();
+      cur = { type: 'li', level: levelOf(l.bullet.x), ordered: l.bullet.ordered, mdParts: [md], textX: l.bullet.textX, y: l.y0, conf, nLines: 1, bold: allBold, h: l.wordH };
+    } else if (cur && cur.type === 'li' && Math.abs(l.x0 - cur.textX) < lineH * 1.5 && gap < lineH * 1.1 && prev && prev.paraId === l.paraId) {
+      cur.mdParts.push(md); cur.nLines++; cur.bold = cur.bold && allBold;
+    } else if (cur && cur.type === 'li' && Math.abs(l.x0 - cur.textX) < lineH * 1.5 && gap < lineH * 0.8) {
+      cur.mdParts.push(md); cur.nLines++; cur.bold = cur.bold && allBold;
+    } else if (cur && cur.type === 'p' && prev && prev.paraId === l.paraId && gap < lineH * 0.9) {
+      cur.mdParts.push(md); cur.nLines++; cur.bold = cur.bold && allBold;
+    } else {
+      push();
+      cur = { type: 'p', level: 0, mdParts: [md], y: l.y0, conf, nLines: 1, bold: allBold, h: l.wordH, x0: l.x0 };
+    }
+    prev = l;
+  }
+  push();
+
+  // 4) Überschriften: einzelne kurze Zeile, fett oder deutlich größer, ohne Satzzeichen am Ende
+  blocks.forEach((b, i) => {
+    b.md = b.mdParts.reduce((acc, part) => joinLine(acc, part), '');
+    if (b.nLines !== 1) return;
+    const plain = plainInline(b.md).trim();
+    const words = plain.split(/\s+/).length;
+    if (plain.length > 60 || words > 8 || /[.,;!?]$/.test(plain) || /^\d+$/.test(plain)) return;
+    const big = b.h >= wordH * 1.3;
+    // Fette Aufzählungspunkte der obersten Ebene mit Unterpunkten sind Abschnittsüberschriften
+    const next = blocks[i + 1];
+    const sectionItem = b.type === 'li' && !b.ordered && b.bold && next && next.type === 'li' && next.level > b.level;
+    if ((b.type === 'p' && (big || b.bold)) || sectionItem) {
+      b.fromList = b.type === 'li';
+      b.type = b.h >= wordH * 1.6 ? 'h1' : 'h2';
+      b.md = unbold(b.md); // fett ist bei Überschriften selbstverständlich
+    }
+  });
+  // Einheitlich: Sind fette Hauptpunkte zu Überschriften geworden, gilt das für alle
+  // kurzen fetten Hauptpunkte (auch ohne Unterpunkte)
+  if (blocks.some((b) => (b.type === 'h1' || b.type === 'h2') && b.fromList)) {
+    for (const b of blocks) {
+      if (b.type !== 'li' || b.level !== 0 || !b.bold || b.nLines !== 1 || b.ordered) continue;
+      const plain = plainInline(b.md).trim();
+      if (plain.length > 60 || /[.,;!?]$/.test(plain)) continue;
+      b.type = 'h2';
+      b.md = unbold(b.md);
+    }
+  }
+  // Unterpunkte einer zur Überschrift gewordenen Aufzählung rücken eine Ebene nach links
+  let shift = 0;
+  for (const b of blocks) {
+    if (b.type === 'h1' || b.type === 'h2') { shift = 1; continue; }
+    if (b.type === 'li') b.level = Math.max(0, b.level - shift);
+    else shift = 0;
+  }
+  return blocks;
+}
+
+function unbold(md) {
+  return md.replace(/\*\*\*(.+?)\*\*\*/g, '*$1*').replace(/\*\*(.+?)\*\*/g, '$1');
+}
+
+function blockToMd(b) {
+  if (b.type === 'h1') return '# ' + b.md;
+  if (b.type === 'h2') return '## ' + b.md;
+  if (b.type === 'li') {
+    const ind = '  '.repeat(b.level);
+    // nummerierte Punkte behalten ihre Nummer („1. …“), sonst Spiegelstrich
+    return ind + (b.ordered ? '' : '- ') + b.md;
+  }
+  return b.md;
 }
 
 // Tesseract trennt Absätze manchmal mitten im Satz (z. B. bei kurzen Zeilen).
@@ -137,8 +278,11 @@ function mergeBroken(paras) {
   const out = [];
   for (const p of paras) {
     const prev = out[out.length - 1];
-    if (prev && !TERMINAL.test(prev.text) && (/^[a-zäöüß]/.test(p.text) || /[-,\u00AD¬]$/.test(prev.text))) {
-      prev.text = joinLine(prev.text, p.text);
+    const pPlain = plainInline(p.md || p.text || '');
+    const prevPlain = prev ? plainInline(prev.md || prev.text || '') : '';
+    if (prev && prev.type === 'p' && (p.type || 'p') === 'p' && !TERMINAL.test(prevPlain)
+        && (/^[a-zäöüß]/.test(pPlain) || /[-,\u00AD¬]$/.test(prevPlain))) {
+      prev.md = joinLine(prev.md, p.md);
     } else {
       out.push({ ...p });
     }
@@ -157,7 +301,8 @@ export function paragraphsFromPlain(text) {
 
 export function splitParas(text) {
   if (!text) return [];
-  return text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  // führende Leerzeichen bleiben erhalten (Einrückung von Aufzählungen)
+  return text.split(/\n\s*\n/).map((p) => p.replace(/^\n+/, '').trimEnd()).filter((p) => p.trim());
 }
 
 const FIGURE_WEIGHT = 600; // eine Abbildung zählt für den Fortschritt wie ~600 Zeichen
@@ -173,7 +318,7 @@ function runningHeaders(pages) {
   const norm = (t) => t.toLowerCase().replace(/[^a-zäöüß]+/g, ' ').trim();
   const count = new Map();
   for (const page of pages) {
-    const paras = splitParas(page.text);
+    const paras = splitParas(page.text).map((m) => parseBlock(m).plain);
     const cands = new Set([paras[0], paras[paras.length - 1]].filter((t) => t && t.length <= 60 && !/[.!?:,;]$/.test(t)).map(norm).filter(Boolean));
     for (const c of cands) count.set(c, (count.get(c) || 0) + 1);
   }
@@ -192,8 +337,9 @@ export function buildFlow(pages, figuresByPage = new Map()) {
     const all = splitParas(page.text);
     const allY = Array.isArray(page.paraY) && page.paraY.length === all.length ? page.paraY : null;
     // Kolumnentitel nur am Seitenanfang/-ende entfernen
-    const keep = all.map((t, i) => !((i === 0 || i === all.length - 1) && isHeader(t)));
-    const paras = all.filter((_, i) => keep[i]);
+    const parsed = all.map(parseBlock);
+    const keep = parsed.map((b, i) => !((i === 0 || i === all.length - 1) && b.type !== 'li' && isHeader(b.plain)));
+    const paras = parsed.filter((_, i) => keep[i]);
     if (allY) page = { ...page, paraY: allY.filter((_, i) => keep[i]) };
     const figs = [...(figuresByPage.get(page.id) || [])].sort((a, b) => (a.rect?.y || 0) - (b.rect?.y || 0));
     let lastFig = null;
@@ -219,7 +365,8 @@ export function buildFlow(pages, figuresByPage = new Map()) {
       ? page.paraY
       : paras.map((_, i) => (i + 0.5) / paras.length);
     let fi = 0;
-    paras.forEach((text, p) => {
+    paras.forEach((blk, p) => {
+      const text = blk.plain;
       // Abbildungen, die oberhalb dieses Absatzes liegen
       while (fi < figs.length && (figs[fi].rect?.y || 0) < ys[p]) pushFigure(figs[fi++]);
       // Gedruckte Bildunterschrift direkt unter der Abbildung → als Bildunterschrift übernehmen
@@ -228,15 +375,16 @@ export function buildFlow(pages, figuresByPage = new Map()) {
         return;
       }
       lastFig = null;
-      if (p === 0 && lastText && !TERMINAL.test(lastText.text)) {
+      if (p === 0 && lastText && blk.type === 'p' && lastText.block === 'p' && !TERMINAL.test(lastText.text)) {
         // Fortsetzung des Absatzes von der Vorseite
+        lastText.md = joinLine(lastText.md, blk.md);
         lastText.text = joinLine(lastText.text, text);
         lastText.continues = lastText.continues || [];
         // offset = Zeichenposition, an der die neue Seite im Absatz beginnt
         lastText.continues.push({ pageId: page.id, pageIndex, offset: lastText.text.length - text.length });
         return;
       }
-      lastText = { pageId: page.id, pageIndex, p, text };
+      lastText = { pageId: page.id, pageIndex, p, text, md: blk.md, block: blk.type, level: blk.level, ordered: !!blk.ordered };
       flow.push(lastText);
     });
     while (fi < figs.length) pushFigure(figs[fi++]);

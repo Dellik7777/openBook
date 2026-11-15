@@ -2,7 +2,7 @@
 // App-Dateien: zuerst aus dem Cache, im Hintergrund aktualisieren.
 // OCR-Engine & Sprachdaten (groß, ändern sich nie): Cache zuerst.
 
-const VERSION = 'v3';
+const VERSION = 'v4';
 const SHELL = `openbook-shell-${VERSION}`;
 const VENDOR = 'openbook-vendor-v1';
 
@@ -25,6 +25,8 @@ const SHELL_FILES = [
   'js/zip.js',
   'js/profiles.js',
   'js/pagecheck.js',
+  'js/rich.js',
+  'js/fontstyle.js',
   'js/config.js',
   'js/sync/sync.js',
   'js/sync/oauth.js',

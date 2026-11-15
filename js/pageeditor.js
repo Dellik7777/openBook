@@ -59,7 +59,7 @@ export async function openPageEditor(root, bookId, pageId) {
       h('div', { class: 'pe-right' },
         h('label', { class: 'row gap-s pn-row' }, h('strong', {}, 'Gedruckte Seitenzahl'), printedNo, pnHint),
         h('div', { class: 'row between' }, h('strong', {}, 'Erkannter Text'), status),
-        h('p', { class: 'muted small' }, 'Absätze mit einer Leerzeile trennen. Änderungen werden automatisch gespeichert.'),
+        h('p', { class: 'muted small' }, 'Absätze mit einer Leerzeile trennen. Formatierung: **fett**, *kursiv*, „- “ am Anfang für Aufzählungen (je Ebene 2 Leerzeichen davor), „## “ für Überschriften. Änderungen werden automatisch gespeichert.'),
         text,
       ),
     ),

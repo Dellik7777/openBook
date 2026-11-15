@@ -6,12 +6,13 @@ import * as profiles from './profiles.js';
 import { h, icon, iconButton, toast, sheet, UrlPool } from './ui.js';
 import { buildFlow } from './textproc.js';
 import { displayNumbers } from './pagecheck.js';
+import { renderInline } from './rich.js';
 
 const SECTION_PAGES = 25; // Buchseiten je gerendertem Abschnitt (hält das Layout schnell)
 const CHARS_PER_MIN = 1300; // ca. 230 Wörter/Minute
 
 const DEFAULTS = {
-  fontSize: 19, font: 'literata', lineHeight: 1.55, margin: 'm', align: 'justify', theme: 'paper', mode: 'text', footer: 'page',
+  fontSize: 19, font: 'literata', lineHeight: 1.55, margin: 'm', align: 'justify', theme: 'paper', mode: 'text', footer: 'page', paraStyle: 'auto',
 };
 const FONTS = {
   literata: { label: 'Literata', css: '"Literata", Georgia, "Times New Roman", serif' },
@@ -118,6 +119,7 @@ export async function openReader(root, bookId) {
     cum[0] = 0;
     for (let i = 0; i < flow.length; i++) cum[i + 1] = cum[i] + flow[i].weight;
     totalChars = Math.max(1, cum[flow.length]);
+    updateParaStyle();
     sections = [];
     let start = 0;
     for (let i = 1; i <= flow.length; i++) {
@@ -164,10 +166,16 @@ export async function openReader(root, bookId) {
       const f = flow[i];
       const prevF = flow[i - 1];
       if (f.figure) { frag.append(figureEl(f, i)); continue; }
-      const el = h('p', { 'data-fi': i, class: f.placeholder ? 'ph' : (prevF && prevF.placeholder) || i === a ? 'first' : '' });
+      const afterBreak = !prevF || prevF.placeholder || prevF.figure || (prevF.block && prevF.block !== 'p') || i === a;
+      let cls = f.placeholder ? 'ph' : f.block === 'h1' || f.block === 'h2' ? f.block : f.block === 'li' ? 'li' + (f.ordered ? ' ol' : '') : afterBreak ? 'first' : '';
+      if (f.block === 'li' && (!flow[i + 1] || flow[i + 1].block !== 'li')) cls += ' li-last';
+      const el = h('p', { 'data-fi': i, class: cls });
+      if (f.block === 'li') el.style.setProperty('--lv', f.level || 0);
       if (f.placeholder) {
         el.append(f.text + ' ');
         el.append(h('button', { class: 'linkish', 'data-show-page': f.pageIndex }, 'Original ansehen'));
+      } else if (f.md && f.md !== f.text) {
+        el.append(renderInline(f.md));
       } else {
         el.textContent = f.text;
       }
@@ -266,23 +274,47 @@ export async function openReader(root, bookId) {
 
   // Erstes Zeichen des Absatzes, das in der Spalte ab x0 steht (binäre Suche über Zeichen-Rechtecke).
   // Unabhängig von Menüs/Overlays, die über dem Text liegen könnten.
+  // Textknoten eines Absatzes (fett/kursiv erzeugt mehrere) mit fortlaufenden Zeichenpositionen
+  function textNodes(el) {
+    const nodes = [];
+    let total = 0;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const n = walker.currentNode;
+      if (n.parentElement && n.parentElement.closest('button')) continue;
+      nodes.push({ n, start: total });
+      total += n.length;
+    }
+    return { nodes, total };
+  }
+  function nodeAt(tn, off) {
+    let k = tn.nodes.length - 1;
+    while (k > 0 && tn.nodes[k].start > off) k--;
+    const e = tn.nodes[k];
+    return e ? { node: e.n, off: Math.min(off - e.start, e.n.length - 1) } : null;
+  }
+
+  // Erstes Zeichen des Absatzes, das in der Spalte ab x0 steht (binäre Suche über Zeichen-Rechtecke).
+  // Unabhängig von Menüs/Overlays, die über dem Text liegen könnten.
   function charAtColumn(el, x0) {
-    const node = el.firstChild;
-    if (!node || node.nodeType !== 3 || !node.length) return 0;
+    const tn = textNodes(el);
+    if (!tn.total) return 0;
     const base = content.getBoundingClientRect().left;
     const r = document.createRange();
     const leftOf = (i) => {
-      r.setStart(node, i); r.setEnd(node, i + 1);
+      const at = nodeAt(tn, i);
+      r.setStart(at.node, at.off); r.setEnd(at.node, at.off + 1);
       const rc = r.getClientRects()[0] || r.getBoundingClientRect();
       return rc.left - base;
     };
-    let lo = 0, hi = node.length - 1, ans = 0;
+    let lo = 0, hi = tn.total - 1, ans = 0;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
       if (leftOf(mid) >= x0 - 1) { ans = mid; hi = mid - 1; } else lo = mid + 1;
     }
     // Leerzeichen am Spaltenanfang überspringen
-    while (ans < node.length - 1 && /\s/.test(node.data[ans])) ans++;
+    const charAt = (i) => { const at = nodeAt(tn, i); return at.node.data[at.off]; };
+    while (ans < tn.total - 1 && /\s/.test(charAt(ans))) ans++;
     return ans;
   }
 
@@ -291,12 +323,15 @@ export async function openReader(root, bookId) {
     if (!el) return 0;
     const base = content.getBoundingClientRect().left;
     let rect = null;
-    if (char > 0 && el.firstChild && el.firstChild.nodeType === 3) {
-      const r = document.createRange();
-      const off = Math.min(char, el.firstChild.length - 1);
-      r.setStart(el.firstChild, Math.max(0, off));
-      r.setEnd(el.firstChild, Math.max(0, off) + 1);
-      rect = r.getClientRects()[0] || null;
+    if (char > 0) {
+      const tn = textNodes(el);
+      if (tn.total) {
+        const at = nodeAt(tn, Math.min(char, tn.total - 1));
+        const r = document.createRange();
+        r.setStart(at.node, Math.max(0, at.off));
+        r.setEnd(at.node, Math.max(0, at.off) + 1);
+        rect = r.getClientRects()[0] || null;
+      }
     }
     if (!rect) rect = el.getClientRects()[0];
     if (!rect) return 0;
@@ -537,12 +572,19 @@ export async function openReader(root, bookId) {
   }
 
   // ---------- Darstellung ----------
+  // Absätze: Einzug (Roman) oder Abstand (Fachtext); automatisch je nach Inhalt
+  function updateParaStyle() {
+    const structured = flow.some((f) => f.block && f.block !== 'p');
+    content.classList.toggle('para-space', settings.paraStyle === 'space' || (settings.paraStyle === 'auto' && structured));
+  }
+
   function applySettings() {
     view.dataset.theme = settings.theme;
     content.style.fontFamily = (FONTS[settings.font] || FONTS.literata).css;
     content.style.fontSize = settings.fontSize + 'px';
     content.style.lineHeight = String(settings.lineHeight);
     content.style.textAlign = settings.align;
+    updateParaStyle();
     content.style.hyphens = settings.align === 'justify' ? 'auto' : 'manual';
     frame.hidden = settings.mode !== 'text';
     imgView.hidden = settings.mode !== 'images';
@@ -614,6 +656,7 @@ export async function openReader(root, bookId) {
       h('strong', {}, 'Zeilenabstand'), seg('lineHeight', { 1.35: 'Eng', 1.55: 'Normal', 1.8: 'Weit' }),
       h('strong', {}, 'Ränder'), seg('margin', { s: 'Schmal', m: 'Normal', l: 'Breit' }),
       h('strong', {}, 'Ausrichtung'), seg('align', { justify: 'Blocksatz', left: 'Linksbündig' }),
+      h('strong', {}, 'Absätze'), seg('paraStyle', { auto: 'Automatisch', indent: 'Einzug', space: 'Abstand' }),
     ));
   }
 

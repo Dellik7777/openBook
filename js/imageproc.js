@@ -54,34 +54,80 @@ function drawScaled(src, sx, sy, sw, sh, maxEdge) {
   return c;
 }
 
-// "Scan-Look": Graustufen + automatische Tonwertkorrektur.
-// Macht Papier hell, Schrift dunkel, verbessert OCR und spart Speicher.
+// "Scan-Look": Graustufen, Schatten entfernen, Papier weiß, Schrift dunkel.
+// Der Papierhintergrund wird lokal geschätzt (großflächiges Maximum + Weichzeichnen),
+// sodass Schatten von Hand/Handy, Falten und ungleichmäßiges Licht verschwinden.
 export function enhance(c) {
+  const W = c.width, H = c.height;
   const ctx = c.getContext('2d', { willReadFrequently: true });
-  const img = ctx.getImageData(0, 0, c.width, c.height);
+  const img = ctx.getImageData(0, 0, W, H);
   const d = img.data;
-  const hist = new Uint32Array(256);
-  for (let i = 0; i < d.length; i += 4) {
-    const y = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
-    d[i] = y;
-    hist[y]++;
+  const g = new Uint8ClampedArray(W * H);
+  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+
+  // 1) Hintergrund auf kleinem Raster: Maximum je Zelle, dann Max-Filter + Weichzeichnen
+  const cell = Math.max(8, Math.round(Math.max(W, H) / 160));
+  const bw = Math.ceil(W / cell), bh = Math.ceil(H / cell);
+  let bg = new Float32Array(bw * bh);
+  for (let by = 0; by < bh; by++) {
+    for (let bx = 0; bx < bw; bx++) {
+      // hellster Wert der Zelle (robust: 2.-hellster Wert per Histogramm wäre genauer, Max reicht)
+      let m = 0;
+      const y1 = Math.min(H, (by + 1) * cell), x1 = Math.min(W, (bx + 1) * cell);
+      for (let y = by * cell; y < y1; y += 2) {
+        const row = y * W;
+        for (let x = bx * cell; x < x1; x += 2) if (g[row + x] > m) m = g[row + x];
+      }
+      bg[by * bw + bx] = m;
+    }
   }
-  const total = d.length / 4;
-  // Schwarzpunkt bei 1 %, Weißpunkt bei 92 % (Papier soll sauber weiß werden)
-  let acc = 0, lo = 0, hi = 255;
+  const pass = (src, fn) => {
+    const out = new Float32Array(src.length);
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      let acc = fn === 'max' ? 0 : 0, n = 0;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const yy = y + dy, xx = x + dx;
+        if (yy < 0 || yy >= bh || xx < 0 || xx >= bw) continue;
+        const v = src[yy * bw + xx];
+        if (fn === 'max') { if (v > acc) acc = v; } else { acc += v; n++; }
+      }
+      out[y * bw + x] = fn === 'max' ? acc : acc / n;
+    }
+    return out;
+  };
+  bg = pass(pass(bg, 'max'), 'avg');
+  bg = pass(bg, 'avg');
+
+  // 2) Pixel durch Hintergrund teilen (bilinear interpoliert)
+  const hist = new Uint32Array(256);
+  for (let y = 0; y < H; y++) {
+    const fy = Math.min(bh - 1.001, Math.max(0, y / cell - 0.5));
+    const y0 = Math.floor(fy), ty = fy - y0;
+    for (let x = 0; x < W; x++) {
+      const fx = Math.min(bw - 1.001, Math.max(0, x / cell - 0.5));
+      const x0 = Math.floor(fx), tx = fx - x0;
+      const i0 = y0 * bw + x0;
+      const b = (bg[i0] * (1 - tx) + bg[i0 + 1] * tx) * (1 - ty) + (bg[i0 + bw] * (1 - tx) + bg[i0 + bw + 1] * tx) * ty;
+      const v = Math.min(255, (g[y * W + x] * 255) / Math.max(40, b));
+      g[y * W + x] = v;
+      hist[v | 0]++;
+    }
+  }
+
+  // 3) Tonwerte: Schwarzpunkt bei 1 %, Papier (inkl. durchscheinender Rückseite) wird weiß
+  const total = W * H;
+  let acc = 0, lo = 0;
   for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > total * 0.01) { lo = v; break; } }
-  acc = 0;
-  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > total * 0.92) { hi = v; break; } }
-  if (hi - lo < 40) { lo = Math.max(0, lo - 20); hi = Math.min(255, hi + 20); }
+  const hi = 232;
+  if (hi - lo < 60) lo = Math.max(0, hi - 60);
   const lut = new Uint8ClampedArray(256);
   for (let v = 0; v < 256; v++) {
     let x = (v - lo) / (hi - lo);
     x = Math.min(1, Math.max(0, x));
-    x = Math.pow(x, 1.25); // Schrift etwas kräftiger
-    lut[v] = Math.round(x * 255);
+    lut[v] = Math.round(Math.pow(x, 1.3) * 255);
   }
-  for (let i = 0; i < d.length; i += 4) {
-    const v = lut[d[i]];
+  for (let i = 0, j = 0; j < g.length; i += 4, j++) {
+    const v = lut[g[j]];
     d[i] = d[i + 1] = d[i + 2] = v;
   }
   ctx.putImageData(img, 0, 0);
