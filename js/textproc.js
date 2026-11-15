@@ -385,7 +385,7 @@ export function buildFlow(pages, figuresByPage = new Map()) {
         lastText.continues.push({ pageId: page.id, pageIndex, offset: lastText.text.length - text.length });
         return;
       }
-      lastText = { pageId: page.id, pageIndex, p, text, md: blk.md, block: blk.type, level: blk.level, ordered: !!blk.ordered };
+      lastText = { pageId: page.id, pageIndex, p, text, md: blk.md, block: blk.type, level: blk.level, ordered: !!blk.ordered, label: blk.label };
       flow.push(lastText);
     });
     while (fi < figs.length) pushFigure(figs[fi++]);

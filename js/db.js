@@ -243,7 +243,7 @@ export async function updateBook(id, patch) {
     const p = typeof patch === 'function' ? patch(book) : patch;
     if (!p || !Object.keys(p).length) { updated = book; return; }
     const now = Date.now();
-    if (['title', 'author', 'cover', 'ignoredGaps', 'folderId', 'tags', 'locked'].some((k) => k in p)) book.metaAt = now;
+    if (['title', 'author', 'cover', 'ignoredGaps', 'folderId', 'tags', 'locked', 'isbn', 'source'].some((k) => k in p)) book.metaAt = now;
     if ('cover' in p && p.cover !== book.cover) book.coverId = p.cover ? uid() : null;
     if ('pageOrder' in p) book.orderAt = now;
     Object.assign(book, p, { updatedAt: now });
@@ -270,18 +270,20 @@ export async function getPagesMeta(bookId) {
   return ordered;
 }
 
-export async function addPage(bookId, { image, thumb }, atIndex = null) {
+// extra: weitere Felder, z. B. für importierte Seiten mit fertigem Text (text, ocrStatus: 'done', paraY …)
+export async function addPage(bookId, { image, thumb, ...extra }, atIndex = null) {
   const now = Date.now();
   const page = {
     id: uid(),
     bookId,
-    image,
-    thumb,
+    image: image || null,
+    thumb: thumb || null,
     text: null,
     ocrStatus: 'pending',
     confidence: null,
     createdAt: now,
     updatedAt: now,
+    ...extra,
   };
   await tx(['books', 'pages'], 'readwrite', async (t) => {
     t.objectStore('pages').put(page);

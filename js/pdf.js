@@ -109,7 +109,8 @@ function textPage(p, pageH) {
     const blk = parseBlock(md);
     const sz = blk.type === 'h1' ? 16 : blk.type === 'h2' ? 13 : size;
     const indent = blk.type === 'li' ? 14 + 14 * (blk.level || 0) : 0;
-    const words = ((blk.type === 'li' && !blk.ordered ? '• ' : '') + blk.plain).split(/\s+/);
+    const plain = blk.type === 'table' ? blk.rows.map((r) => r.map((c) => parseBlock(c).plain).join('  |  ')).join(' \n ') : blk.plain;
+    const words = ((blk.type === 'li' && !blk.ordered ? '• ' : '') + plain).split(/ +/);
     let line = '';
     const flush = () => {
       if (!line) return;
@@ -119,6 +120,7 @@ function textPage(p, pageH) {
       line = '';
     };
     for (const w of words) {
+      if (w === '\n') { flush(); continue; }
       const test = line ? line + ' ' + w : w;
       if (textWidth(test, sz) > maxW - indent) { flush(); line = w; } else line = test;
     }

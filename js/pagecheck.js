@@ -93,3 +93,18 @@ export function displayNumbers(pages) {
   }
   return { labels, total: labels[labels.length - 1] };
 }
+
+// Neue Reihenfolge nach gedruckter Seitenzahl. Seiten ohne Zahl bleiben hinter ihrer
+// vorherigen nummerierten Seite (z. B. Bildseiten, Kapitelanfänge). → [pageId] oder null (schon richtig)
+export function orderByPrinted(pages) {
+  const groups = [];
+  let cur = { n: -Infinity, idx: -1, ids: [] };
+  groups.push(cur);
+  pages.forEach((p, i) => {
+    if (Number.isInteger(p.printedNo) && p.printedNo > 0) { cur = { n: p.printedNo, idx: i, ids: [p.id] }; groups.push(cur); }
+    else cur.ids.push(p.id);
+  });
+  const sorted = [...groups].sort((a, b) => a.n - b.n || a.idx - b.idx);
+  const order = sorted.flatMap((g) => g.ids);
+  return order.every((id, i) => id === pages[i].id) ? null : order;
+}

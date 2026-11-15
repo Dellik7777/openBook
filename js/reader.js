@@ -6,7 +6,7 @@ import * as profiles from './profiles.js';
 import { h, icon, iconButton, toast, sheet, UrlPool, download, safeName } from './ui.js';
 import { buildFlow } from './textproc.js';
 import { displayNumbers } from './pagecheck.js';
-import { renderInline } from './rich.js';
+import { renderInline, parseBlock, renderTable } from './rich.js';
 import { ensureBookAccess } from './lock.js';
 import { takeJump } from './search.js';
 
@@ -43,6 +43,12 @@ export async function openReader(root, bookId) {
   let userMoved = false;
   const userNav = () => { userMoved = true; };
   db.updateState(profileId, bookId, { lastOpenedAt: Date.now() }, { touch: false });
+  // Lesestatus: beim Öffnen „Lese ich“ (außer schon gelesen)
+  let curStatus = state.status || null;
+  if (curStatus !== 'done' && curStatus !== 'reading') {
+    curStatus = 'reading';
+    db.updateState(profileId, bookId, { status: 'reading', statusAt: Date.now() }, { touch: false });
+  }
 
   const settings = loadSettings();
   const pool = new UrlPool();
@@ -173,6 +179,17 @@ export async function openReader(root, bookId) {
       const f = flow[i];
       const prevF = flow[i - 1];
       if (f.figure) { frag.append(figureEl(f, i)); continue; }
+      if (f.block === 'table') {
+        const blk = parseBlock(f.md);
+        frag.append(h('div', { 'data-fi': i, class: 'tbl' }, renderTable(blk)));
+        continue;
+      }
+      if (f.block === 'fn') {
+        const el = h('p', { 'data-fi': i, class: 'fn' + (prevF && prevF.block === 'fn' ? '' : ' fn-first') }, h('span', { class: 'fn-label' }, f.label + ' '));
+        el.append(renderInline(f.md));
+        frag.append(el);
+        continue;
+      }
       const afterBreak = !prevF || prevF.placeholder || prevF.figure || (prevF.block && prevF.block !== 'p') || i === a;
       let cls = f.placeholder ? 'ph' : f.block === 'h1' || f.block === 'h2' ? f.block : f.block === 'li' ? 'li' + (f.ordered ? ' ol' : '') : afterBreak ? 'first' : '';
       if (f.block === 'li' && (!flow[i + 1] || flow[i + 1].block !== 'li')) cls += ' li-last';
@@ -423,6 +440,12 @@ export async function openReader(root, bookId) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       if (pos && userMoved) { lastSavedAt = Date.now(); db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now() }); }
+      // Bis zum Ende gelesen → „Gelesen“
+      if (pos && userMoved && (pos.ratio || 0) >= 0.995 && curStatus !== 'done') {
+        curStatus = 'done';
+        db.updateState(profileId, bookId, { status: 'done', statusAt: Date.now() }, { touch: false });
+        toast('Ende erreicht – als „Gelesen“ markiert', 3500);
+      }
     }, 400);
   }
 
@@ -993,8 +1016,35 @@ export async function openReader(root, bookId) {
   const statTick = setInterval(() => {
     if (document.visibilityState !== 'visible') return;
     if (Date.now() - lastActivity > 120000 && !tts.isActive()) return; // länger nichts gemacht → nicht zählen
-    import('./stats.js').then((m) => m.addReading(profileId, bookId, 15)).catch(() => {});
+    import('./stats.js').then(async (m) => {
+      await m.addReading(profileId, bookId, 15);
+      // Tagesziel erreicht? (einmal pro Tag melden)
+      const goal = profiles.current() && profiles.current().goalMin;
+      if (!goal) return;
+      const day = m.dayKey();
+      const sec = ((await m.getStats(profileId)).days[day] || {}).sec || 0;
+      let told = '';
+      try { told = localStorage.getItem('ob.goalTold.' + profileId) || ''; } catch (e) { /* */ }
+      if (sec >= goal * 60 && told !== day) {
+        try { localStorage.setItem('ob.goalTold.' + profileId, day); } catch (e) { /* */ }
+        toast(`Tagesziel erreicht: ${goal} Min. gelesen`, 3500);
+      }
+    }).catch(() => {});
   }, 15000);
+
+  // ---------- Fußnoten ----------
+  function openFootnote(label, fromFi) {
+    // die nächste Fußnote mit dieser Nummer nach dem Verweis, sonst die davor
+    let target = -1;
+    for (let i = fromFi; i < flow.length; i++) if (flow[i].block === 'fn' && flow[i].label === label) { target = i; break; }
+    if (target < 0) for (let i = fromFi; i >= 0; i--) if (flow[i].block === 'fn' && flow[i].label === label) { target = i; break; }
+    if (target < 0) { toast(`Fußnote ${label} nicht gefunden`); return; }
+    const f = flow[target];
+    const body = h('p', { class: 'fn-pop' });
+    body.append(renderInline(f.md));
+    const s = sheet('Fußnote ' + label, h('div', { class: 'stack' }, body,
+      h('button', { class: 'btn small', onClick: () => { s.close(); userNav(); goToFlow(target, 0); afterMove(); } }, 'Zur Fußnote im Text springen')));
+  }
 
   // ---------- Abbildung vergrößert ansehen ----------
   function openFigure(id) {
@@ -1055,6 +1105,8 @@ export async function openReader(root, bookId) {
     if (!start) return;
     const dx = e.clientX - start.x, dy = e.clientY - start.y, dt = Date.now() - start.t;
     start = null;
+    const fnBtn = e.target.closest && e.target.closest('.fnref');
+    if (fnBtn && Math.abs(dx) < 10 && Math.abs(dy) < 10) { openFootnote(fnBtn.dataset.fn, +fnBtn.closest('[data-fi]').dataset.fi); return; }
     const showBtn = e.target.closest && e.target.closest('[data-show-page]');
     if (showBtn) { switchModeTo('images', +showBtn.dataset.showPage); return; }
     const sel = window.getSelection();

@@ -9,6 +9,7 @@ Damit Lesepixel komplett offline funktioniert, liegen diese Dateien direkt im Re
 | `jszip/` | [JSZip](https://stuk.github.io/jszip/) 3.10.1 | MIT / GPLv3 |
 | `qr/qrcode.js` | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4 | MIT |
 | `qr/jsQR.js` | [jsQR](https://github.com/cozmo/jsQR) 1.4.0 (QR-Codes lesen, wenn der Browser keinen eingebauten Leser hat) | Apache-2.0 |
+| `pdfjs/` | [PDF.js](https://github.com/mozilla/pdf.js) 4.10.38 (`pdfjs-dist`, Legacy-Build; PDF-Import, wird erst bei Bedarf geladen) | Apache-2.0 (`LICENSE`) |
 | `fonts/literata-*` | [Literata](https://github.com/googlefonts/literata) über @fontsource | SIL OFL 1.1 |
 | `fonts/montserrat-*` | [Montserrat](https://github.com/JulietaUla/Montserrat) | SIL OFL 1.1 (`OFL-Montserrat.txt`) |
 

@@ -213,13 +213,13 @@ async function runOnce() {
         const cover = rb.coverId ? await downloadCover(rb.coverId) : null;
         await db.putBookRaw({
           id, title: rb.title, author: rb.author || '', cover, coverId: cover ? rb.coverId : null, ignoredGaps: rb.ignoredGaps || [],
-          folderId: rb.folderId || null, tags: rb.tags || [], locked: !!rb.locked,
+          folderId: rb.folderId || null, tags: rb.tags || [], locked: !!rb.locked, isbn: rb.isbn || null, source: rb.source || null,
           pageOrder: [], createdAt: rb.createdAt || Date.now(), updatedAt: Date.now(), metaAt: rb.metaAt || 0, orderAt: 0,
         }, { silent: true });
         changedBooks.add(id);
       } else if ((rb.metaAt || 0) > (lb.metaAt || 0)) {
         lb.title = rb.title; lb.author = rb.author || ''; lb.metaAt = rb.metaAt; lb.ignoredGaps = rb.ignoredGaps || [];
-        lb.folderId = rb.folderId || null; lb.tags = rb.tags || []; lb.locked = !!rb.locked;
+        lb.folderId = rb.folderId || null; lb.tags = rb.tags || []; lb.locked = !!rb.locked; lb.isbn = rb.isbn || null; lb.source = rb.source || null;
         if (rb.coverId !== lb.coverId) {
           lb.cover = rb.coverId ? await downloadCover(rb.coverId) : null;
           lb.coverId = lb.cover ? rb.coverId : null;
@@ -263,11 +263,13 @@ async function runOnce() {
       const ls = localStates.get(key);
       // Markierungen beider Seiten zusammenführen (sonst ginge eine auf dem anderen Gerät verloren)
       const mergedHl = mergeHighlights(ls && ls.highlights, rs.highlights);
+      // Lesestatus hat einen eigenen Zeitstempel (Öffnen ändert ihn, ohne die Position zu „berühren“)
+      const st = ls && (ls.statusAt || 0) >= (rs.statusAt || 0) ? { status: ls.status ?? null, statusAt: ls.statusAt || 0 } : { status: rs.status ?? null, statusAt: rs.statusAt || 0 };
       if (!ls || (rs.updatedAt || 0) > (ls.updatedAt || 0)) {
-        await db.putStateRaw({ ...rs, key, highlights: mergedHl }, { silent: true });
+        await db.putStateRaw({ ...rs, key, highlights: mergedHl, ...st }, { silent: true });
         changedOther = true;
-      } else if (JSON.stringify(mergedHl) !== JSON.stringify(ls.highlights || [])) {
-        await db.putStateRaw({ ...ls, highlights: mergedHl }, { silent: true });
+      } else if (JSON.stringify(mergedHl) !== JSON.stringify(ls.highlights || []) || st.statusAt !== (ls.statusAt || 0)) {
+        await db.putStateRaw({ ...ls, highlights: mergedHl, ...st }, { silent: true });
         changedOther = true;
       }
     }
@@ -345,7 +347,7 @@ async function buildLibrary() {
   for (const b of await db.getBooks()) {
     lib.books[b.id] = {
       id: b.id, title: b.title, author: b.author || '', coverId: b.cover ? b.coverId : null, ignoredGaps: b.ignoredGaps || [],
-      folderId: b.folderId || null, tags: b.tags || [], locked: !!b.locked,
+      folderId: b.folderId || null, tags: b.tags || [], locked: !!b.locked, isbn: b.isbn || null, source: b.source || null,
       createdAt: b.createdAt, metaAt: b.metaAt || 0, contentV: await contentVersion(b.id),
     };
   }
