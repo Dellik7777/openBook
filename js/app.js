@@ -7,6 +7,7 @@ import { openReader } from './reader.js';
 import { openPageEditor } from './pageeditor.js';
 import { openSend, openReceive } from './transferview.js';
 import { openLegal } from './legalview.js';
+import { openStats } from './statsview.js';
 import * as profiles from './profiles.js';
 import * as sync from './sync/sync.js';
 import { clientId, redirectUri } from './sync/oauth.js';
@@ -32,6 +33,7 @@ const routes = [
   [/^#\/send\/([\w]+)$/, (m) => openSend(app, m[1])],
   [/^#\/receive$/, () => openReceive(app)],
   [/^#\/rechtliches$/, () => openLegal(app)],
+  [/^#\/statistik$/, () => openStats(app)],
   [/^#\/page\/([\w]+)\/([\w]+)$/, (m) => openPageEditor(app, m[1], m[2])],
 ];
 
@@ -743,6 +745,7 @@ async function openSettings() {
   const lockEl = await lockCard();
   const s = sheet('Einstellungen', h('div', { class: 'stack' },
     syncEl,
+    h('a', { class: 'card card-link', href: '#/statistik', onClick: () => s.close() }, h('strong', {}, icon('stats'), ' Lesestatistik'), h('span', { class: 'muted small' }, 'Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher')),
     lockEl,
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Scan-Filter'), h('br'), h('span', { class: 'muted small' }, 'Fotos in Graustufen mit hellem Papier speichern. Bessere Erkennung, weniger Speicher.')), scanFilter),
     h('div', { class: 'card' },

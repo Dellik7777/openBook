@@ -261,8 +261,13 @@ async function runOnce() {
     for (const [key, rs] of Object.entries(lib.states || {})) {
       if (!profileIds.has(rs.profileId) || !bookIds.has(rs.bookId)) continue;
       const ls = localStates.get(key);
+      // Markierungen beider Seiten zusammenführen (sonst ginge eine auf dem anderen Gerät verloren)
+      const mergedHl = mergeHighlights(ls && ls.highlights, rs.highlights);
       if (!ls || (rs.updatedAt || 0) > (ls.updatedAt || 0)) {
-        await db.putStateRaw({ ...rs, key }, { silent: true });
+        await db.putStateRaw({ ...rs, key, highlights: mergedHl }, { silent: true });
+        changedOther = true;
+      } else if (JSON.stringify(mergedHl) !== JSON.stringify(ls.highlights || [])) {
+        await db.putStateRaw({ ...ls, highlights: mergedHl }, { silent: true });
         changedOther = true;
       }
     }
@@ -305,6 +310,16 @@ async function adoptRemoteProfiles(remoteProfiles, tomb) {
     if (profiles.currentId() === lp.id) await profiles.switchTo(rp.id);
     await db.deleteProfile(lp.id, { tombstone: false });
   }
+}
+
+// Vereinigung nach ID; bei gleicher ID gewinnt die jüngere Änderung (auch Löschungen)
+function mergeHighlights(a = [], b = []) {
+  const map = new Map();
+  for (const x of [...(a || []), ...(b || [])]) {
+    const cur = map.get(x.id);
+    if (!cur || (x.updatedAt || 0) > (cur.updatedAt || 0)) map.set(x.id, x);
+  }
+  return [...map.values()].sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
 }
 
 function strip(lib) {
