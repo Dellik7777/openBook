@@ -193,7 +193,7 @@ export function styledWords(words) {
     } else {
       out += ' ';
     }
-    out += escapeMd(w.text);
+    out += escapeMd(w.text) + (w.fn ? `[^${w.fn}]` : '');
   });
   close();
   return out;
