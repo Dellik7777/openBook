@@ -1,6 +1,6 @@
 // Bildverarbeitung für Buchseiten: Skalieren, Scan-Filter, Teilen, Drehen, Zuschneiden.
 
-import { detectPage, warpPerspective, flattenCurl, findGutter } from './pagedetect.js';
+import { detectPage, warpPerspective, flattenCurl, findGutter, trimDarkBorders } from './pagedetect.js';
 import { dewarpText } from './dewarp.js';
 
 const MAX_EDGE = 2200;   // lange Kante gespeicherter Seiten (gut lesbar + gute OCR)
@@ -157,6 +157,11 @@ export async function processCapture(source, { split = false, scanFilter = true,
     try {
       const det = detectPage(src, { spread: split });
       if (det) used = det.quad.map(([x, y]) => [x / W0, y / H0]);
+      else {
+        // Seite füllt das Bild: wenigstens dunkle Randstreifen abschneiden
+        const r = trimDarkBorders(src);
+        if (r) used = [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]];
+      }
     } catch (e) { console.warn('Seitenerkennung übersprungen', e); }
   }
   // Original für „Ecken anpassen“ (nur Einzelseiten; bei Doppelseiten die entzerrte Hälfte)
