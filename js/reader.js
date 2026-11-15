@@ -898,7 +898,9 @@ export async function openReader(root, bookId) {
     const rateTxt = () => (settings.ttsRate || 1).toLocaleString('de-DE', { minimumFractionDigits: 1 }) + '×';
     rateBtn.textContent = rateTxt();
     function voice() {
-      const vs = synth.getVoices().filter((v) => /^de(-|_|$)/i.test(v.lang));
+      // Stimmen auf dem Gerät bevorzugen (Online-Stimmen schicken den Text an den Anbieter)
+      const all = synth.getVoices().filter((v) => /^de(-|_|$)/i.test(v.lang));
+      const vs = all.filter((v) => v.localService !== false).length ? all.filter((v) => v.localService !== false) : all;
       return vs.find((v) => /premium|enhanced|anna|petra|markus|helena/i.test(v.name)) || vs[0] || null;
     }
     function cycleRate() {

@@ -178,5 +178,7 @@ export function download(blob, filename) {
 }
 
 export function safeName(s) {
-  return (s || 'buch').replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'buch';
+  return (s || 'buch')
+    .replace(/[„“”"‚‘’«»]/g, '').replace(/[–—]/g, '-')
+    .replace(/[\\/:*?<>|]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'buch';
 }

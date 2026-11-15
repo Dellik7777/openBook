@@ -13,6 +13,9 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Doppelseiten-Modus**: ein Foto vom aufgeschlagenen Buch wird automatisch in linke und rechte Seite geteilt
 - Scan-Filter (Graustufen, helles Papier), Taschenlampe, „Zurück“ für die letzte Aufnahme
 - Import vorhandener Fotos aus der Galerie
+- **Seiten gerade rücken:** Lesepixel findet die Seite im Foto, schneidet den Tisch ab, entzerrt schräge Aufnahmen und gleicht die Wölbung zur Buchmitte aus (mit Sicherheitsprüfung, damit kein Text abgeschnitten wird)
+- **Auto-Auslöser:** umblättern, still halten, die App fotografiert selbst
+- **Qualitätscheck** direkt nach dem Foto (unscharf, zu dunkel) mit „Nochmal“
 - **Seitenprüfung:** Lesepixel liest die gedruckten Seitenzahlen mit und meldet sofort, wenn eine Seite fehlt, doppelt ist oder in falscher Reihenfolge liegt. Mit „Nachscannen“ wird die fehlende Seite an der richtigen Stelle eingefügt, mit „Passt so“ wird der Hinweis ausgeblendet
 - **Abbildungs-Modus:** Karten, Bilder und Diagramme in Farbe als ganze Seite fotografieren
 
@@ -30,6 +33,11 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - Hintergründe: Weiß, Papier, Sepia, Dunkel, Schwarz
 - Fußzeile mit Buchseite und Prozent oder verbleibender Lesezeit (antippen zum Umschalten)
 - Lesezeichen, Volltextsuche, Seitenübersicht, Schieberegler
+- **Vorlesen** mit der Stimme des Geräts – blättert mit und hebt den Absatz hervor
+- **Inhaltsverzeichnis** aus den erkannten Überschriften, „Noch X Min. im Kapitel“
+- **Markieren und Notizen** in vier Farben, Liste aller Markierungen, Export als Markdown
+- **Zwei Spalten im Querformat** auf dem Tablet
+- **Lesestatistik:** Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher
 - **Abbildungen im Text:** markierte Bilder, Karten und Diagramme stehen an der richtigen Stelle im Lesefluss, mit Bildunterschrift; antippen zum Vergrößern
 - Fußzeile mit den echten Seitenzahlen des gedruckten Buchs
 - Originalfoto-Ansicht mit Zoom, z. B. für Tabellen oder Formeln
@@ -47,8 +55,14 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 
 **Verwalten**
 - Bibliothek mit Covern (Foto oder automatisch erzeugt) und Lesefortschritt
+- **Ordner** (auch verschachtelt) und **Tags**, Filter nach Tag
+- **Suche über alle Bücher** (Titel, Autor, Tags, Text) – ein Treffer öffnet den Leser an der Stelle
+- **App-Sperre mit Face ID / Touch ID** und PIN, wahlweise für die ganze App oder einzelne Bücher
+- **Erinnerung an die Sicherung** und **Speicher sparen** (Fotos verkleinern oder löschen, Text bleibt)
+- Unsicher erkannte Wörter werden im Editor zum Prüfen angeboten
 - Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen, Seitenzahl korrigieren, **Abbildungen markieren** (Beschriftungen in der Abbildung landen dann nicht im Lesetext)
 - **EPUB-Export**, z. B. für „Send to Kindle“, Apple Books oder Tolino
+- **Durchsuchbares PDF**: Originalfotos mit unsichtbarer Textebene
 - Sicherung und Wiederherstellung der ganzen Bibliothek als ZIP (mit Fotos)
 
 ## Installieren
@@ -120,6 +134,12 @@ js/backup.js          Sicherung/Wiederherstellung
 sw.js                 Service Worker (offline)
 js/transfer.js        Direktübertragung (WebRTC-Datenkanal, Signalisierung per QR-Code)
 js/transferview.js    Bildschirme „Senden“ und „Empfangen“
+js/lock.js            App-Sperre (WebAuthn/Face ID, PIN)
+js/search.js          Suche über alle Bücher
+js/storage.js         Speicher sparen
+js/stats.js, statsview.js  Lesestatistik
+js/pagedetect.js      Seitenerkennung, Entzerrung, Wölbung, Qualität, Bewegung
+js/pdf.js             Durchsuchbares PDF (eigener PDF-Schreiber)
 js/legal.js           Angaben zum Anbieter (Impressum/Datenschutz)
 js/legalview.js       Seite „Rechtliches“
 vendor/               Tesseract, Sprachdaten, JSZip, QR-Codes, Literata, Montserrat (siehe vendor/README.md)

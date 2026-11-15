@@ -621,6 +621,13 @@ async function renderBook(bookId) {
         const blob = await exportEpub(bookId);
         download(blob, safeName(book.title) + '.epub');
       } }, icon('download'), 'Als EPUB exportieren (z. B. für Kindle)'),
+      h('button', { class: 'menu-item', onClick: async () => {
+        s.close();
+        const { exportPdf } = await import('./pdf.js');
+        toast('PDF wird erstellt …');
+        const blob = await exportPdf(bookId, (r) => { if (r < 1) toast(`PDF wird erstellt … ${Math.round(r * 100)} %`, 1500); });
+        download(blob, safeName(book.title) + '.pdf');
+      } }, icon('pdf'), 'Als durchsuchbares PDF exportieren'),
       h('button', { class: 'menu-item', onClick: () => { s.close(); go(`#/send/${bookId}`); } }, icon('wifi'), 'An eigenes Gerät senden (WLAN, ohne Internet)'),
       h('button', { class: 'menu-item', onClick: async () => {
         s.close();

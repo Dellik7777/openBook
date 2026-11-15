@@ -122,7 +122,7 @@ async function runOn(w) {
         // Ganze Seite ist eine Abbildung → kein Text
         await db.updatePage(pageId, { text: '', ocrStatus: 'done', paraY: [] });
       } else {
-        const { input, height, gray } = await prepareImage(page.image, figures);
+        const { input, height, width, gray } = await prepareImage(page.image, figures);
         const { data } = await w.worker.recognize(input, {}, { blocks: true, text: true });
         markStyles(data, gray);
         const res = analyzeOcr(data, { height });
@@ -134,6 +134,7 @@ async function runOn(w) {
         };
         if (!page.printedNoManual) patch.printedNo = res.printedNo;
         patch.uncertain = uncertainWords(data, patch.text);
+        patch.lines = lineBoxes(data, width, height);
         await db.updatePage(pageId, patch);
       }
     }
@@ -163,7 +164,7 @@ export function isQueued(pageId) {
 // und markierte Abbildungen weiß übermalen, damit deren Beschriftungen nicht im Lesetext landen.
 async function prepareImage(blob, figures) {
   let bmp = null;
-  try { bmp = await createImageBitmap(blob); } catch (e) { return { input: blob, height: 0, gray: null }; }
+  try { bmp = await createImageBitmap(blob); } catch (e) { return { input: blob, height: 0, width: 0, gray: null }; }
   const { width, height } = bmp;
   const c = document.createElement('canvas');
   c.width = width; c.height = height;
@@ -178,7 +179,7 @@ async function prepareImage(blob, figures) {
   let gray = null;
   try { gray = grayImage(c, width, height); } catch (e) { console.warn('Stil-Erkennung nicht möglich', e); }
   const input = figures.length ? await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9)) : blob;
-  return { input, height, gray };
+  return { input, height, width, gray };
 }
 
 // Fett/kursiv je Wort bestimmen (setzt word.bold / word.italic im OCR-Ergebnis)
@@ -223,4 +224,21 @@ function uncertainWords(data, text) {
     }
   }
   return [...out];
+}
+
+// Lage jeder Textzeile (relativ 0..1) – für die unsichtbare Textebene im durchsuchbaren PDF
+function lineBoxes(data, width, height) {
+  if (!width || !height) return null;
+  const out = [];
+  const r = (v) => Math.round(v * 10000) / 10000;
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        const t = (line.text || '').replace(/\s+/g, ' ').trim();
+        if (!t || !line.bbox) continue;
+        out.push({ t, x0: r(line.bbox.x0 / width), y0: r(line.bbox.y0 / height), x1: r(line.bbox.x1 / width), y1: r(line.bbox.y1 / height) });
+      }
+    }
+  }
+  return out;
 }
