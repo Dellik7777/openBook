@@ -23,7 +23,13 @@ export async function exportBackup(bookIds = null) {
       pages: pages.map((p) => {
         if (p.image) zip.file(`books/${b.id}/pages/${p.id}.jpg`, p.image);
         if (p.thumb) zip.file(`books/${b.id}/thumbs/${p.id}.jpg`, p.thumb);
-        return { id: p.id, text: p.text, ocrStatus: p.ocrStatus === 'done' ? 'done' : 'pending', confidence: p.confidence, createdAt: p.createdAt, hasImage: !!p.image };
+        return { id: p.id, text: p.text, ocrStatus: p.ocrStatus === 'done' ? 'done' : 'pending', confidence: p.confidence, createdAt: p.createdAt, hasImage: !!p.image, printedNo: p.printedNo ?? null, printedNoManual: !!p.printedNoManual, paraY: p.paraY || null };
+      }),
+      figures: (await db.getFiguresOfBook(b.id)).map((f) => {
+        zip.file(`books/${b.id}/figures/${f.id}.jpg`, f.image);
+        const { image, ...meta } = f;
+        void image;
+        return meta;
       }),
     });
   }
@@ -46,6 +52,7 @@ export async function importBackup(file) {
     const id = existing.has(mb.id) ? db.uid() : mb.id;
     const cover = mb.hasCover ? await blobOf(zip, `books/${mb.id}/cover.jpg`) : null;
     const pageIds = [];
+    const pageIdMap = new Map();
     for (const mp of mb.pages) {
       const image = await blobOf(zip, `books/${mb.id}/pages/${mp.id}.jpg`);
       const thumb = (await blobOf(zip, `books/${mb.id}/thumbs/${mp.id}.jpg`)) || image;
@@ -58,7 +65,11 @@ export async function importBackup(file) {
         confidence: mp.confidence ?? null,
         createdAt: mp.createdAt || Date.now(),
         updatedAt: Date.now(),
+        printedNo: mp.printedNo ?? null,
+        printedNoManual: !!mp.printedNoManual,
+        paraY: mp.paraY || null,
       });
+      pageIdMap.set(mp.id, pid);
       pageIds.push(pid);
     }
     const copy = existing.has(mb.id);
@@ -74,7 +85,14 @@ export async function importBackup(file) {
       updatedAt: now,
       metaAt: now,
       orderAt: now,
+      ignoredGaps: mb.ignoredGaps || [],
     });
+    for (const mf of mb.figures || []) {
+      const image = await blobOf(zip, `books/${mb.id}/figures/${mf.id}.jpg`);
+      const pid = pageIdMap.get(mf.pageId);
+      if (!image || !pid) continue;
+      await db.putFigureRaw({ ...mf, id: copy ? db.uid() : mf.id, bookId: id, pageId: pid, image, updatedAt: now });
+    }
     // Lesestände (Format v2) bzw. alte Leseposition (Format v1) übernehmen
     const profileId = profiles.currentId();
     if (!copy && Array.isArray(mb.states)) {

@@ -11,11 +11,13 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines B
 - **Doppelseiten-Modus**: ein Foto vom aufgeschlagenen Buch wird automatisch in linke und rechte Seite geteilt
 - Scan-Filter (Graustufen, helles Papier), Taschenlampe, „Zurück“ für die letzte Aufnahme
 - Import vorhandener Fotos aus der Galerie
+- **Seitenprüfung:** openBook liest die gedruckten Seitenzahlen mit und meldet sofort, wenn eine Seite fehlt, doppelt ist oder in falscher Reihenfolge liegt. Mit „Nachscannen“ wird die fehlende Seite an der richtigen Stelle eingefügt, mit „Passt so“ wird der Hinweis ausgeblendet
+- **Abbildungs-Modus:** Karten, Bilder und Diagramme in Farbe als ganze Seite fotografieren
 
 **Texterkennung (OCR)**
 - Tesseract läuft komplett im Browser (Deutsch + Englisch), auch offline
 - Läuft im Hintergrund weiter, während du scannst; wird nach einem Neustart fortgesetzt
-- Repariert Silbentrennung am Zeilenende, entfernt Seitenzahlen und verbindet Absätze über Seitengrenzen
+- Repariert Silbentrennung am Zeilenende, entfernt Seitenzahlen und Kolumnentitel und verbindet Absätze über Seitengrenzen
 
 **Lesen wie auf einem Kindle**
 - Echter Seitenumbruch statt Scrollen: rechts tippen = weiter, links = zurück, Mitte = Menü, Wischen geht auch
@@ -23,7 +25,9 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines B
 - Hintergründe: Weiß, Papier, Sepia, Dunkel, Schwarz
 - Fußzeile mit Buchseite und Prozent oder verbleibender Lesezeit (antippen zum Umschalten)
 - Lesezeichen, Volltextsuche, Seitenübersicht, Schieberegler
-- Originalfoto-Ansicht mit Zoom, z. B. für Bilder, Tabellen oder Formeln
+- **Abbildungen im Text:** markierte Bilder, Karten und Diagramme stehen an der richtigen Stelle im Lesefluss, mit Bildunterschrift; antippen zum Vergrößern
+- Fußzeile mit den echten Seitenzahlen des gedruckten Buchs
+- Originalfoto-Ansicht mit Zoom, z. B. für Tabellen oder Formeln
 - Leseposition wird gespeichert, der Bildschirm bleibt beim Lesen an
 
 **Leseprofile & Synchronisierung**
@@ -33,7 +37,7 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines B
 
 **Verwalten**
 - Bibliothek mit Covern (Foto oder automatisch erzeugt) und Lesefortschritt
-- Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen
+- Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen, Seitenzahl korrigieren, **Abbildungen markieren** (Beschriftungen in der Abbildung landen dann nicht im Lesetext)
 - **EPUB-Export**, z. B. für „Send to Kindle“, Apple Books oder Tolino
 - Sicherung und Wiederherstellung der ganzen Bibliothek als ZIP (mit Fotos)
 
@@ -87,7 +91,8 @@ js/scanner.js         Kamera-Scanner
 js/reader.js          Kindle-artiger Leser (CSS-Spalten-Paginierung)
 js/pageeditor.js      Seiten bearbeiten
 js/ocr.js             OCR-Warteschlange (Tesseract.js, Web Worker)
-js/textproc.js        OCR → Absätze, Silbentrennung, Seitenübergänge
+js/textproc.js        OCR → Absätze, Seitenzahlen, Kolumnentitel, Abbildungen im Lesefluss
+js/pagecheck.js       Seitenprüfung (fehlende/doppelte/vertauschte Seiten)
 js/imageproc.js       Skalieren, Scan-Filter, Teilen, Drehen, Zuschneiden
 js/db.js              IndexedDB
 js/epub.js            EPUB-3-Export

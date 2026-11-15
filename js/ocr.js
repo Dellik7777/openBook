@@ -3,7 +3,7 @@
 // sodass nach einem Neustart der App automatisch weitergemacht wird.
 
 import * as db from './db.js';
-import { paragraphsFromOcr } from './textproc.js';
+import { analyzeOcr } from './textproc.js';
 
 const base = new URL('../vendor/tesseract/', import.meta.url).href;
 const LANGS = 'deu+eng';
@@ -114,13 +114,23 @@ async function runOn(w) {
     const page = await db.getPage(pageId);
     if (page && page.image) {
       await db.updatePage(pageId, { ocrStatus: 'running' });
-      const { data } = await w.worker.recognize(page.image, {}, { blocks: true, text: true });
-      const paras = paragraphsFromOcr(data);
-      await db.updatePage(pageId, {
-        text: paras.join('\n\n'),
-        ocrStatus: 'done',
-        confidence: Math.round(data.confidence || 0),
-      });
+      const figures = await db.getFiguresOfPage(pageId);
+      if (figures.some((f) => f.fullPage)) {
+        // Ganze Seite ist eine Abbildung → kein Text
+        await db.updatePage(pageId, { text: '', ocrStatus: 'done', paraY: [] });
+      } else {
+        const { input, height } = await prepareImage(page.image, figures);
+        const { data } = await w.worker.recognize(input, {}, { blocks: true, text: true });
+        const res = analyzeOcr(data, { height });
+        const patch = {
+          text: res.paras.join('\n\n'),
+          paraY: res.paraY,
+          ocrStatus: 'done',
+          confidence: Math.round(data.confidence || 0),
+        };
+        if (!page.printedNoManual) patch.printedNo = res.printedNo;
+        await db.updatePage(pageId, patch);
+      }
     }
   } catch (e) {
     console.error('OCR-Fehler', e);
@@ -142,4 +152,25 @@ export async function resume() {
 
 export function isQueued(pageId) {
   return queue.includes(pageId) || active.has(pageId);
+}
+
+// Bildgröße ermitteln und markierte Abbildungen weiß übermalen,
+// damit deren Beschriftungen nicht im Lesetext landen.
+async function prepareImage(blob, figures) {
+  let bmp = null;
+  try { bmp = await createImageBitmap(blob); } catch (e) { return { input: blob, height: 0 }; }
+  const height = bmp.height;
+  if (!figures.length) { bmp.close && bmp.close(); return { input: blob, height }; }
+  const c = document.createElement('canvas');
+  c.width = bmp.width; c.height = bmp.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(bmp, 0, 0);
+  ctx.fillStyle = '#fff';
+  for (const f of figures) {
+    const r = f.rect;
+    ctx.fillRect(r.x * c.width, r.y * c.height, r.w * c.width, r.h * c.height);
+  }
+  bmp.close && bmp.close();
+  const input = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
+  return { input, height };
 }

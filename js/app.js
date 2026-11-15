@@ -8,6 +8,7 @@ import { openPageEditor } from './pageeditor.js';
 import * as profiles from './profiles.js';
 import * as sync from './sync/sync.js';
 import { clientId, redirectUri } from './sync/oauth.js';
+import { checkPages, describe } from './pagecheck.js';
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -18,6 +19,7 @@ const routes = [
   [/^#?\/?$/, () => renderLibrary()],
   [/^#\/book\/([\w]+)$/, (m) => renderBook(m[1])],
   [/^#\/scan\/([\w]+)$/, (m) => openScanner(app, m[1])],
+  [/^#\/scan\/([\w]+)\/nach\/([\w]+)(?:\/(\d+))?$/, (m) => openScanner(app, m[1], m[2], +(m[3] || 1))],
   [/^#\/read\/([\w]+)$/, (m) => openReader(app, m[1])],
   [/^#\/page\/([\w]+)\/([\w]+)$/, (m) => openPageEditor(app, m[1], m[2])],
 ];
@@ -252,6 +254,7 @@ async function renderBook(bookId) {
   const badge = ocrBadge();
   const head = h('div', { class: 'book-head' });
   const pagesGrid = h('div', { class: 'pages-grid' });
+  const issuesCard = h('div', { class: 'card issues', hidden: true });
 
   const view = h('div', { class: 'page book' },
     h('header', { class: 'topbar' },
@@ -266,6 +269,7 @@ async function renderBook(bookId) {
         h('button', { class: 'btn small', onClick: () => importImages() }, icon('images'), 'Fotos importieren'),
       ),
     ),
+    issuesCard,
     pagesGrid,
   );
   app.append(view);
@@ -311,9 +315,41 @@ async function renderBook(bookId) {
         ),
       ),
     );
+    const figs = await db.getFiguresOfBook(bookId);
+    figPages = new Set(figs.map((f) => f.pageId));
+    renderIssues(pages);
     pagesGrid.replaceChildren(...(pages.length ? pages.map((p, i) => pageTile(p, i)) : [
       h('p', { class: 'muted pad' }, 'Noch keine Seiten. Tippe auf „Seiten scannen“.'),
     ]));
+  }
+
+  let figPages = new Set();
+
+  // Seitenprüfung: fehlende, doppelte, vertauschte Seiten anhand der gedruckten Seitenzahlen
+  function renderIssues(pages) {
+    const all = checkPages(pages, { ignored: book.ignoredGaps || [] });
+    const withNo = pages.filter((p) => p.printedNo).length;
+    if (!all.length) {
+      issuesCard.hidden = !withNo || pages.length < 3;
+      issuesCard.className = 'card issues ok';
+      issuesCard.replaceChildren(h('span', { class: 'row gap-s' }, icon('check'), `Seitenprüfung: keine Lücken gefunden (${withNo} von ${pages.length} Seitenzahlen erkannt).`));
+      return;
+    }
+    issuesCard.hidden = false;
+    issuesCard.className = 'card issues';
+    const ignore = async (key) => { await db.updateBook(bookId, (b) => ({ ignoredGaps: [...new Set([...(b.ignoredGaps || []), key])] })); };
+    issuesCard.replaceChildren(
+      h('strong', {}, all.length === 1 ? 'Seitenprüfung: 1 Hinweis' : `Seitenprüfung: ${all.length} Hinweise`),
+      ...all.map((is) => h('div', { class: 'issue' },
+        h('span', { class: 'grow' }, describe(is)),
+        h('div', { class: 'row gap-s wrap' },
+          is.type === 'missing'
+            ? h('button', { class: 'btn small primary', onClick: () => go(`#/scan/${bookId}/nach/${is.afterPageId}/${Math.min(is.count, 20)}`) }, icon('camera'), 'Nachscannen')
+            : h('button', { class: 'btn small', onClick: () => go(`#/page/${bookId}/${is.pageId || is.pageIds[1]}`) }, 'Ansehen'),
+          h('button', { class: 'btn small', onClick: () => ignore(is.key) }, 'Passt so'),
+        ),
+      )),
+    );
   }
 
   function pageTile(p, i) {
@@ -322,8 +358,9 @@ async function renderBook(bookId) {
       p.thumb
         ? h('img', { src: pool.get(p.thumb), alt: '', loading: 'lazy' })
         : h('span', { class: 'page-textthumb' }, (p.text || '').slice(0, 220)),
-      h('span', { class: 'page-no' }, i + 1),
+      h('span', { class: 'page-no' }, p.printedNo ? `S. ${p.printedNo}` : i + 1),
       label ? h('span', { class: 'page-status ' + p.ocrStatus }, label) : null,
+      figPages.has(p.id) ? h('span', { class: 'page-fig', title: 'Enthält Abbildung' }, icon('figure')) : null,
     );
   }
 

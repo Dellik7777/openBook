@@ -155,3 +155,15 @@ export async function processCover(blob) {
   const c = drawScaled(src, 0, 0, w, h, 900);
   return toBlob(c, 'image/jpeg', 0.8);
 }
+
+// Ausschnitt einer Seite als Abbildung (rect relativ 0..1), max. 1600 px
+export async function cropFigure(blob, rect) {
+  const src = await loadBitmap(blob);
+  const { w, h } = dims(src);
+  const sx = Math.round(rect.x * w), sy = Math.round(rect.y * h);
+  const sw = Math.max(1, Math.round(rect.w * w)), sh = Math.max(1, Math.round(rect.h * h));
+  const c = drawScaled(src, sx, sy, sw, sh, 1600);
+  const image = await toBlob(c, 'image/jpeg', 0.82);
+  if (src.close) try { src.close(); } catch (e) { /* ignorieren */ }
+  return { image, w: c.width, h: c.height };
+}

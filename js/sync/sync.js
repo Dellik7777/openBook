@@ -7,6 +7,7 @@
 //   library.json         Profile, Bücher (Metadaten), Lesestände, Löschmarkierungen
 //   book-<id>.json        Seitentexte und Seitenreihenfolge eines Buchs
 //   cover-<coverId>.jpg   Cover
+//   fig-<id>.jpg          Abbildungen (Karten, Diagramme, Bilder)
 //
 // Konfliktregel: Für jeden Datensatz gewinnt die jüngere Änderung (Zeitstempel).
 
@@ -152,7 +153,7 @@ export function syncNow({ interactive = false } = {}) {
 // ---------- Abgleich ----------
 
 const LIB = 'library.json';
-const emptyLib = () => ({ format: 'openbook-sync', version: 1, profiles: {}, books: {}, states: {}, tombstones: { books: {}, pages: {}, profiles: {} } });
+const emptyLib = () => ({ format: 'openbook-sync', version: 1, profiles: {}, books: {}, states: {}, tombstones: { books: {}, pages: {}, profiles: {}, figures: {} } });
 
 async function runOnce() {
   await provider.begin();
@@ -164,6 +165,7 @@ async function runOnce() {
   }
   const syncState = await db.getMeta('sync', {});
   const seen = syncState.seen || {};
+  const figsInCloud = syncState.figs || {};
   const changedBooks = new Set();
   let changedOther = false;
 
@@ -201,12 +203,12 @@ async function runOnce() {
       if (!lb) {
         const cover = rb.coverId ? await downloadCover(rb.coverId) : null;
         await db.putBookRaw({
-          id, title: rb.title, author: rb.author || '', cover, coverId: cover ? rb.coverId : null,
+          id, title: rb.title, author: rb.author || '', cover, coverId: cover ? rb.coverId : null, ignoredGaps: rb.ignoredGaps || [],
           pageOrder: [], createdAt: rb.createdAt || Date.now(), updatedAt: Date.now(), metaAt: rb.metaAt || 0, orderAt: 0,
         }, { silent: true });
         changedBooks.add(id);
       } else if ((rb.metaAt || 0) > (lb.metaAt || 0)) {
-        lb.title = rb.title; lb.author = rb.author || ''; lb.metaAt = rb.metaAt;
+        lb.title = rb.title; lb.author = rb.author || ''; lb.metaAt = rb.metaAt; lb.ignoredGaps = rb.ignoredGaps || [];
         if (rb.coverId !== lb.coverId) {
           lb.cover = rb.coverId ? await downloadCover(rb.coverId) : null;
           lb.coverId = lb.cover ? rb.coverId : null;
@@ -224,9 +226,15 @@ async function runOnce() {
       if (rb && remoteV > (seen[book.id] || 0)) {
         const file = await provider.read(`book-${book.id}.json`);
         if (file) {
-          await mergeContent(book.id, JSON.parse(file.data));
+          await mergeContent(book.id, JSON.parse(file.data), figsInCloud);
           changedBooks.add(book.id);
         }
+      }
+      // Abbildungen hochladen, die noch nicht in der Cloud liegen
+      for (const f of await db.getFiguresOfBook(book.id)) {
+        if (figsInCloud[f.id] || !f.image) continue;
+        await provider.write(`fig-${f.id}.jpg`, f.image, 'image/jpeg');
+        figsInCloud[f.id] = true;
       }
       const localV = await contentVersion(book.id);
       if (!rb || localV > remoteV) {
@@ -261,7 +269,7 @@ async function runOnce() {
       next.updatedAt = Date.now();
       await provider.write(LIB, JSON.stringify(next), 'application/json', { ifVersion: remote ? remote.version : null });
     }
-    await db.setMeta('sync', { seen, lastSync: Date.now() });
+    await db.setMeta('sync', { seen, figs: figsInCloud, lastSync: Date.now() });
   } finally {
     applying = false;
   }
@@ -309,7 +317,7 @@ async function buildLibrary() {
   for (const p of await db.getProfiles()) lib.profiles[p.id] = p;
   for (const b of await db.getBooks()) {
     lib.books[b.id] = {
-      id: b.id, title: b.title, author: b.author || '', coverId: b.cover ? b.coverId : null,
+      id: b.id, title: b.title, author: b.author || '', coverId: b.cover ? b.coverId : null, ignoredGaps: b.ignoredGaps || [],
       createdAt: b.createdAt, metaAt: b.metaAt || 0, contentV: await contentVersion(b.id),
     };
   }
@@ -326,8 +334,10 @@ async function contentVersion(bookId) {
   if (!book) return 0;
   let v = book.orderAt || 0;
   for (const p of await db.getPagesOfBook(bookId)) v = Math.max(v, p.updatedAt || 0);
+  for (const f of await db.getFiguresOfBook(bookId)) v = Math.max(v, f.updatedAt || 0);
   const tomb = await db.getTombstones();
   for (const t of Object.values(tomb.pages)) if (t.bookId === bookId) v = Math.max(v, t.at);
+  for (const t of Object.values(tomb.figures)) if (t.bookId === bookId) v = Math.max(v, t.at);
   return v;
 }
 
@@ -339,21 +349,33 @@ async function buildContent(bookId) {
       text: p.text || '',
       ocrStatus: p.ocrStatus === 'done' || p.ocrStatus === 'error' ? p.ocrStatus : 'pending',
       confidence: p.confidence ?? null,
+      printedNo: p.printedNo ?? null,
+      printedNoManual: !!p.printedNoManual,
+      paraY: p.paraY || null,
       createdAt: p.createdAt || 0,
       updatedAt: p.updatedAt || 0,
     };
   }
+  const figures = {};
+  for (const f of await db.getFiguresOfBook(bookId)) {
+    figures[f.id] = { pageId: f.pageId, rect: f.rect, w: f.w, h: f.h, caption: f.caption || '', fullPage: !!f.fullPage, createdAt: f.createdAt || 0, updatedAt: f.updatedAt || 0 };
+  }
   const tomb = await db.getTombstones();
   const deletedPages = {};
   for (const [id, t] of Object.entries(tomb.pages)) if (t.bookId === bookId) deletedPages[id] = t;
-  return { format: 'openbook-book', version: 1, id: bookId, pageOrder: book.pageOrder, orderAt: book.orderAt || 0, pages, deletedPages };
+  const deletedFigures = {};
+  for (const [id, t] of Object.entries(tomb.figures)) if (t.bookId === bookId) deletedFigures[id] = t;
+  return { format: 'openbook-book', version: 1, id: bookId, pageOrder: book.pageOrder, orderAt: book.orderAt || 0, pages, deletedPages, figures, deletedFigures };
 }
 
-async function mergeContent(bookId, remote) {
+async function mergeContent(bookId, remote, figsInCloud) {
   const remoteTomb = {};
   for (const [id, t] of Object.entries(remote.deletedPages || {})) remoteTomb[id] = { ...t, bookId };
-  await db.mergeTombstones({ pages: remoteTomb });
-  const tomb = (await db.getTombstones()).pages;
+  const remoteFigTomb = {};
+  for (const [id, t] of Object.entries(remote.deletedFigures || {})) remoteFigTomb[id] = { ...t, bookId };
+  await db.mergeTombstones({ pages: remoteTomb, figures: remoteFigTomb });
+  const allTomb = await db.getTombstones();
+  const tomb = allTomb.pages;
 
   const local = new Map((await db.getPagesOfBook(bookId)).map((p) => [p.id, p]));
   for (const [id, rp] of Object.entries(remote.pages || {})) {
@@ -365,12 +387,16 @@ async function mergeContent(bookId, remote) {
         text: rp.text || '',
         ocrStatus: rp.ocrStatus === 'done' || rp.ocrStatus === 'error' ? rp.ocrStatus : 'remote',
         confidence: rp.confidence ?? null, createdAt: rp.createdAt || 0, updatedAt: rp.updatedAt || 0,
+        printedNo: rp.printedNo ?? null, printedNoManual: !!rp.printedNoManual, paraY: rp.paraY || null,
       };
       await db.putPage(page, { silent: true });
       local.set(id, page);
     } else if ((rp.updatedAt || 0) > (lp.updatedAt || 0)) {
       lp.text = rp.text || '';
       lp.confidence = rp.confidence ?? null;
+      lp.printedNo = rp.printedNo ?? null;
+      lp.printedNoManual = !!rp.printedNoManual;
+      lp.paraY = rp.paraY || null;
       lp.updatedAt = rp.updatedAt;
       if (rp.ocrStatus === 'done' || rp.ocrStatus === 'error') lp.ocrStatus = rp.ocrStatus;
       else if (!lp.image) lp.ocrStatus = 'remote';
@@ -379,6 +405,25 @@ async function mergeContent(bookId, remote) {
   }
   for (const id of [...local.keys()]) {
     if (tomb[id]) { await db.deletePageRaw(id); local.delete(id); }
+  }
+
+  // Abbildungen
+  const localFigs = new Map((await db.getFiguresOfBook(bookId)).map((f) => [f.id, f]));
+  for (const id of localFigs.keys()) {
+    if (allTomb.figures[id]) { await db.deleteFigure(id, { tombstone: false }); localFigs.delete(id); }
+  }
+  for (const [id, rf] of Object.entries(remote.figures || {})) {
+    if (allTomb.figures[id] || !local.has(rf.pageId)) continue;
+    const lf = localFigs.get(id);
+    if (!lf) {
+      const file = await provider.read(`fig-${id}.jpg`, 'blob').catch(() => null);
+      if (!file) continue; // Bild noch nicht hochgeladen → beim nächsten Mal
+      await db.putFigureRaw({ id, bookId, ...rf, image: new Blob([file.data], { type: 'image/jpeg' }) }, { silent: true });
+      figsInCloud[id] = true;
+    } else {
+      figsInCloud[id] = true;
+      if ((rf.updatedAt || 0) > (lf.updatedAt || 0)) await db.putFigureRaw({ ...lf, ...rf, id, bookId, image: lf.image }, { silent: true });
+    }
   }
 
   const book = await db.getBook(bookId);

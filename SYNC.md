@@ -1,6 +1,6 @@
 # Synchronisierung einrichten
 
-openBook gleicht **Texte, Lesepositionen, Lesezeichen, Profile und Cover** über deinen eigenen Cloud-Speicher ab. Es gibt keinen Server und kein openBook-Konto. **Fotos der Seiten werden nie hochgeladen**, sie bleiben auf dem Gerät, mit dem du gescannt hast.
+openBook gleicht **Texte, Lesepositionen, Lesezeichen, Profile, Cover und markierte Abbildungen** über deinen eigenen Cloud-Speicher ab. Es gibt keinen Server und kein openBook-Konto. **Fotos der Seiten werden nie hochgeladen**, sie bleiben auf dem Gerät, mit dem du gescannt hast.
 
 Damit openBook auf deinen Google Drive oder dein OneDrive zugreifen darf, brauchst du **einmalig eine „Client-ID“**. Das ist eine Art App-Kennung, die du kostenlos in deinem eigenen Google- bzw. Microsoft-Konto anlegst. Sie ist nicht geheim und kommt in `js/config.js`.
 
