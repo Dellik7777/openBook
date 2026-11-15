@@ -62,6 +62,15 @@ export function icon(name, cls = '') {
   return span;
 }
 
+// Pixel-Motiv (drei orange Quadrate, aus dem Markenzeichen abgeleitet)
+export function pixels(cls = '') {
+  const span = document.createElement('span');
+  span.className = 'pixels ' + cls;
+  span.setAttribute('aria-hidden', 'true');
+  span.innerHTML = '<svg viewBox="0 0 142 142"><g fill="#F28C28"><rect x="82" width="60" height="60"/><rect y="82" width="60" height="60"/><rect x="82" y="82" width="60" height="60"/></g></svg>';
+  return span;
+}
+
 export function iconButton(name, label, onClick, cls = '') {
   return h('button', { class: 'icon-btn ' + cls, type: 'button', 'aria-label': label, title: label, onClick }, icon(name));
 }
