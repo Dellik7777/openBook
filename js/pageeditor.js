@@ -1,6 +1,7 @@
 // Einzelne Seite: Foto ansehen, drehen, zuschneiden, verschieben, löschen, Text korrigieren.
 
 import * as db from './db.js';
+import { ensureBookAccess } from './lock.js';
 import * as ocr from './ocr.js';
 import { h, icon, iconButton, toast, confirmDialog, UrlPool } from './ui.js';
 import { rotate, crop, cropFigure } from './imageproc.js';
@@ -10,6 +11,7 @@ export async function openPageEditor(root, bookId, pageId) {
   let book = await db.getBook(bookId);
   let page = await db.getPage(pageId);
   if (!book || !page) { location.hash = `#/book/${bookId}`; return; }
+  if (!(await ensureBookAccess(book))) { location.hash = '#/'; return; }
 
   const img = h('img', { class: 'pe-img', alt: 'Seitenfoto', draggable: 'false' });
   const cropBox = h('div', { class: 'crop-box', hidden: true });

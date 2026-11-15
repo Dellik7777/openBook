@@ -11,12 +11,15 @@
 //   states:   { key: "profileId|bookId", profileId, bookId, position, bookmarks, lastOpenedAt, updatedAt }
 //   figures:  { id, bookId, pageId, image (Blob), rect {x,y,w,h} (relativ zur Seite), w, h,
 //               caption, fullPage, createdAt, updatedAt }  (Abbildungen, Karten, Diagramme)
+//   folders:  { id, name, parentId, createdAt, updatedAt }
 //   meta:     { key, value }  (Sync-Status, Löschmarkierungen)
+//
+// Bücher haben zusätzlich: folderId (null = Bibliothek), tags: [string], locked (Sperre)
 //
 // Seiten haben zusätzlich: printedNo (gedruckte Seitenzahl), printedNoManual, paraY (Lage der Absätze)
 
 const DB_NAME = 'openbook';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 let dbPromise = null;
 
 // Profilfarben (weiße Schrift darauf gut lesbar); zuerst die Markenfarben Navy und Orange-dunkel
@@ -52,6 +55,10 @@ function open() {
         const figs = db.createObjectStore('figures', { keyPath: 'id' });
         figs.createIndex('bookId', 'bookId');
         figs.createIndex('pageId', 'pageId');
+      }
+      if (old < 4) {
+        // Ordner: { id, name, parentId (null = oberste Ebene), createdAt, updatedAt }
+        db.createObjectStore('folders', { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -126,8 +133,8 @@ async function getOne(store, key) {
 
 // ---------- Löschmarkierungen (damit Löschen auch auf anderen Geräten ankommt) ----------
 
-const TOMB_KINDS = ['books', 'pages', 'profiles', 'figures'];
-const emptyTombs = () => ({ books: {}, pages: {}, profiles: {}, figures: {} });
+const TOMB_KINDS = ['books', 'pages', 'profiles', 'figures', 'folders'];
+const emptyTombs = () => ({ books: {}, pages: {}, profiles: {}, figures: {}, folders: {} });
 
 async function addTombstone(t, kind, id, extra = {}) {
   const store = t.objectStore('meta');
@@ -236,7 +243,7 @@ export async function updateBook(id, patch) {
     const p = typeof patch === 'function' ? patch(book) : patch;
     if (!p || !Object.keys(p).length) { updated = book; return; }
     const now = Date.now();
-    if ('title' in p || 'author' in p || 'cover' in p || 'ignoredGaps' in p) book.metaAt = now;
+    if (['title', 'author', 'cover', 'ignoredGaps', 'folderId', 'tags', 'locked'].some((k) => k in p)) book.metaAt = now;
     if ('cover' in p && p.cover !== book.cover) book.coverId = p.cover ? uid() : null;
     if ('pageOrder' in p) book.orderAt = now;
     Object.assign(book, p, { updatedAt: now });
@@ -350,6 +357,41 @@ export async function deletePageRaw(id) {
     const keys = await promisify(t.objectStore('figures').index('pageId').getAllKeys(id));
     for (const k of keys) t.objectStore('figures').delete(k);
   });
+}
+
+// ---------- Ordner ----------
+
+export const getFolders = () => getAll('folders');
+export const getFolder = (id) => getOne('folders', id);
+
+export async function putFolder(folder, { raw = false, silent = false } = {}) {
+  if (!raw) folder.updatedAt = Date.now();
+  await tx(['folders'], 'readwrite', (t) => t.objectStore('folders').put(folder));
+  if (!silent) emit('folder', folder.id);
+  return folder;
+}
+
+export async function createFolder(name, parentId = null) {
+  const now = Date.now();
+  return putFolder({ id: uid(), name: name || 'Neuer Ordner', parentId: parentId || null, createdAt: now, updatedAt: now });
+}
+
+// Löschen: Bücher und Unterordner wandern eine Ebene nach oben
+export async function deleteFolder(id, { tombstone = true } = {}) {
+  const folder = await getFolder(id);
+  if (!folder) return;
+  const parent = folder.parentId || null;
+  for (const f of await getFolders()) if (f.parentId === id) await putFolder({ ...f, parentId: parent });
+  for (const b of await getBooks()) if (b.folderId === id) await updateBook(b.id, { folderId: parent });
+  await tx(['folders', 'meta'], 'readwrite', async (t) => {
+    t.objectStore('folders').delete(id);
+    if (tombstone) await addTombstone(t, 'folders', id);
+  });
+  emit('folder', id);
+}
+
+export async function deleteFolderRaw(id) {
+  await tx(['folders'], 'readwrite', (t) => t.objectStore('folders').delete(id));
 }
 
 // ---------- Abbildungen ----------

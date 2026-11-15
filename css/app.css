@@ -533,3 +533,56 @@ input[type=range] { accent-color: var(--accent); }
 .topbar .brand .pixels { margin-right: 2px; }
 .avatar { box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .avatar { box-shadow: inset 0 0 0 1.5px #5E687C; } }
+
+/* ---------- Bibliothek: Suche, Ordner, Tags ---------- */
+.search-wrap { position: relative; margin: 2px 0 14px; }
+.search-wrap > .icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: var(--muted); pointer-events: none; }
+.search-input { padding-left: 40px; background: var(--surface); }
+.search-results { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.sr-book { gap: 2px; padding: 10px 12px; }
+.sr-title { display: flex; align-items: baseline; gap: 4px; width: 100%; border: 0; background: none; padding: 4px 0 6px; text-align: left; flex-wrap: wrap; }
+.sr-count { margin-left: auto; }
+.sr-hit { display: flex; gap: 10px; width: 100%; text-align: left; border: 0; border-top: 1px solid var(--line); background: none; padding: 8px 0; font-size: 14px; line-height: 1.45; }
+.sr-page { flex: none; min-width: 52px; font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 2px; }
+.crumbs { flex-wrap: wrap; row-gap: 4px; }
+.crumbs a { color: var(--muted); text-decoration: none; }
+.crumbs a.here, .crumbs .here { color: var(--ink); }
+.crumbs .sep { color: var(--line); font-weight: 400; }
+.tag-crumb { display: inline-flex; align-items: center; gap: 4px; }
+.tag-crumb .icon { width: 14px; height: 14px; }
+.tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 14px; }
+.book-meta .tag-row { margin: 2px 0 8px; }
+.tag-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 500; text-decoration: none; cursor: pointer; }
+.tag-chip small { color: var(--muted); font-size: 11px; }
+.tag-chip.on { background: var(--brand); color: var(--bg); border-color: var(--brand); }
+.tag-chip.on small { color: inherit; opacity: .8; }
+.tag-chip .icon { width: 14px; height: 14px; }
+.folder-chip .icon { color: var(--accent-text); }
+.tag-edit { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-edit:empty { display: none; }
+.folder-cover {
+  aspect-ratio: 2 / 3; width: 100%; border-radius: var(--radius); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); position: relative; overflow: hidden;
+}
+.folder-cover::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 4px; background: var(--accent); }
+.folder-cover .icon { width: 46px; height: 46px; color: var(--brand); }
+.folder-count { font-size: 12px; color: var(--muted); font-weight: 500; }
+a.tile-main { text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 6px; }
+.tile .tile-main { position: relative; }
+.lock-badge { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: var(--radius); background: #293244; color: #F28C28; display: flex; align-items: center; justify-content: center; z-index: 2; }
+.lock-badge .icon { width: 16px; height: 16px; }
+.cover.locked > * { filter: blur(6px); }
+
+/* ---------- Sperrbildschirm ---------- */
+html.locked #app { visibility: hidden; }
+.lockscreen { position: fixed; inset: 0; z-index: 200; background: #1D2433; color: #F4F5F7; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.lock-box { width: 100%; max-width: 340px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+.lock-box .pixels { width: 44px; height: 44px; }
+.lock-box h2 { margin: 4px 0 0; font-size: 20px; }
+.lock-sub { margin: 0; color: #C3C9D4; font-size: 14px; }
+.lock-form { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.lock-pin { text-align: center; letter-spacing: .4em; font-size: 20px; background: #293244; color: #fff; border-color: #3B4760; }
+.lockscreen .btn:not(.primary) { background: #293244; color: #fff; border-color: #3B4760; }
+.lock-msg { min-height: 1.2em; margin: 0; color: #F28C28; font-size: 14px; }
+.lock-cancel { color: #C3C9D4; }
+.crumbs a, .crumbs > span { display: inline-flex; align-items: center; gap: 8px; }

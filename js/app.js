@@ -12,6 +12,9 @@ import * as sync from './sync/sync.js';
 import { clientId, redirectUri } from './sync/oauth.js';
 import { checkPages, describe } from './pagecheck.js';
 import { stripMd } from './rich.js';
+import * as lock from './lock.js';
+import { searchLibrary, setJump } from './search.js';
+import { bookSize, shrinkPhotos, deletePhotos, fmtBytes } from './storage.js';
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -20,6 +23,8 @@ let cleanup = null;
 
 const routes = [
   [/^#?\/?$/, () => renderLibrary()],
+  [/^#\/ordner\/([\w]+)$/, (m) => renderLibrary({ folderId: m[1] })],
+  [/^#\/tag\/(.+)$/, (m) => renderLibrary({ tag: decodeURIComponent(m[1]) })],
   [/^#\/book\/([\w]+)$/, (m) => renderBook(m[1])],
   [/^#\/scan\/([\w]+)$/, (m) => openScanner(app, m[1])],
   [/^#\/scan\/([\w]+)\/nach\/([\w]+)(?:\/(\d+))?$/, (m) => openScanner(app, m[1], m[2], +(m[3] || 1))],
@@ -72,11 +77,15 @@ function ocrBadge() {
 
 // ---------- Bibliothek ----------
 
-async function renderLibrary() {
+async function renderLibrary({ folderId = null, tag = null } = {}) {
   const pool = new UrlPool();
   const badge = ocrBadge();
   const grid = h('div', { class: 'grid' });
+  const results = h('div', { class: 'search-results', hidden: true });
   let sortMode = localStorage.getItem('ob.sort') || 'recent';
+  let query = sessionStorage.getItem('ob.q') || '';
+
+  if (folderId && !(await db.getFolder(folderId))) { go('#/'); return; }
 
   const sortSel = h('select', { class: 'select', 'aria-label': 'Sortierung', onChange: (e) => { sortMode = e.target.value; localStorage.setItem('ob.sort', sortMode); fill(); } },
     h('option', { value: 'recent' }, 'Zuletzt gelesen'),
@@ -86,16 +95,23 @@ async function renderLibrary() {
   );
   sortSel.value = sortMode;
   const avatarBtn = h('button', { class: 'avatar-btn', 'aria-label': 'Profil wechseln', onClick: () => openProfiles() });
-  const libTitle = h('h2', {});
+  const crumbs = h('h2', { class: 'crumbs' });
+  const tagRow = h('div', { class: 'tag-row' });
   const syncIndicator = syncIndicatorEl();
+  let multiProfile = (await db.getProfiles()).length > 1;
   function showProfile() {
     const p = profiles.current();
     avatarBtn.replaceChildren(avatar(p));
     avatarBtn.title = 'Profil: ' + (p ? p.name : '');
-    libTitle.replaceChildren(pixels('small'), p && multiProfile ? `Bibliothek · ${p.name.split(/\s+/)[0]}` : 'Bibliothek');
   }
-  let multiProfile = (await db.getProfiles()).length > 1;
   showProfile();
+
+  const searchInput = h('input', { class: 'input search-input', type: 'search', placeholder: 'In allen Büchern suchen …', value: query, enterkeyhint: 'search', 'aria-label': 'In allen Büchern suchen' });
+  let searchTimer = null;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { query = searchInput.value; sessionStorage.setItem('ob.q', query); runSearch(); }, 250);
+  });
 
   const view = h('div', { class: 'page library' },
     h('header', { class: 'topbar' },
@@ -104,19 +120,43 @@ async function renderLibrary() {
         syncIndicator,
         iconButton('settings', 'Einstellungen & Sicherung', () => openSettings()),
         avatarBtn,
-        h('button', { class: 'btn primary btn-add', 'aria-label': 'Neues Buch', onClick: () => newBookDialog() }, icon('plus'), h('span', { class: 'label' }, 'Buch')),
+        h('button', { class: 'btn primary btn-add', 'aria-label': 'Neues Buch', onClick: () => newBookDialog(folderId) }, icon('plus'), h('span', { class: 'label' }, 'Buch')),
       ),
     ),
     usageCard(),
-    h('div', { class: 'toolbar' }, libTitle, sortSel),
-    badge,
-    grid,
+    await backupReminder(),
+    h('div', { class: 'search-wrap' }, icon('search'), searchInput),
+    results,
+    h('div', { class: 'lib-body' },
+      h('div', { class: 'toolbar' }, crumbs,
+        h('div', { class: 'row gap-s' },
+          tag ? null : iconButton('folderPlus', 'Neuer Ordner', () => folderDialog(null, folderId)),
+          sortSel)),
+      tagRow,
+      badge,
+      grid,
+    ),
   );
   app.append(view);
+  const body = view.querySelector('.lib-body');
+
+  async function renderCrumbs() {
+    const parts = [h('a', { href: '#/', class: folderId || tag ? '' : 'here' }, pixels('small'), multiProfile ? `Bibliothek · ${profiles.current().name.split(/\s+/)[0]}` : 'Bibliothek')];
+    if (folderId) {
+      const chain = [];
+      let f = await db.getFolder(folderId);
+      while (f) { chain.unshift(f); f = f.parentId ? await db.getFolder(f.parentId) : null; }
+      for (const c of chain) parts.push(h('span', { class: 'sep' }, '›'), h('a', { href: '#/ordner/' + c.id, class: c.id === folderId ? 'here' : '' }, c.name));
+    }
+    if (tag) parts.push(h('span', { class: 'sep' }, '›'), h('span', { class: 'here tag-crumb' }, icon('tag'), tag));
+    crumbs.replaceChildren(...parts);
+  }
 
   async function fill() {
     pool.clear();
-    const books = await db.getBooks();
+    await renderCrumbs();
+    const [books, folders] = await Promise.all([db.getBooks(), db.getFolders()]);
+    const folderIds = new Set(folders.map((f) => f.id));
     const states = new Map((await db.getStatesOfProfile(profiles.currentId())).map((st) => [st.bookId, st]));
     for (const b of books) b._state = states.get(b.id) || null;
     const opened = (b) => (b._state && b._state.lastOpenedAt) || b.createdAt;
@@ -126,28 +166,202 @@ async function renderLibrary() {
       author: (a, b) => (a.author || '').localeCompare(b.author || '', 'de') || a.title.localeCompare(b.title, 'de'),
       added: (a, b) => b.createdAt - a.createdAt,
     };
-    books.sort(sorters[sortMode] || sorters.recent);
-    if (!books.length) {
+    // Tags (alle Bücher)
+    const tagCount = new Map();
+    for (const b of books) for (const t of b.tags || []) tagCount.set(t, (tagCount.get(t) || 0) + 1);
+    const tags = [...tagCount].sort((a, b) => a[0].localeCompare(b[0], 'de'));
+    tagRow.hidden = !tags.length;
+    tagRow.replaceChildren(...tags.map(([t, n]) => h('a', {
+      class: 'tag-chip' + (t === tag ? ' on' : ''), href: t === tag ? (folderId ? '#/ordner/' + folderId : '#/') : '#/tag/' + encodeURIComponent(t),
+    }, '#' + t, h('small', {}, n))));
+
+    const inFolder = (b) => (folderIds.has(b.folderId) ? b.folderId : null) === folderId;
+    const shown = books.filter((b) => (tag ? (b.tags || []).includes(tag) : inFolder(b))).sort(sorters[sortMode] || sorters.recent);
+    const subfolders = tag ? [] : folders.filter((f) => (folderIds.has(f.parentId) ? f.parentId : null) === folderId)
+      .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+
+    const count = (fid) => {
+      const ids = new Set([fid]);
+      let grew = true;
+      while (grew) { grew = false; for (const f of folders) if (ids.has(f.parentId) && !ids.has(f.id)) { ids.add(f.id); grew = true; } }
+      return books.filter((b) => ids.has(b.folderId)).length;
+    };
+
+    if (!shown.length && !subfolders.length) {
       grid.replaceChildren(h('div', { class: 'empty' },
-        icon('book', 'big'),
-        h('h3', {}, 'Noch keine Bücher'),
-        h('p', { class: 'muted' }, 'Lege ein Buch an und fotografiere die Seiten. Lesepixel erkennt den Text und du kannst das Buch danach überall lesen, auch ohne Internet.'),
-        h('button', { class: 'btn primary', onClick: () => newBookDialog() }, icon('plus'), 'Erstes Buch anlegen'),
+        icon(folderId ? 'folder' : tag ? 'tag' : 'book', 'big'),
+        h('h3', {}, folderId ? 'Dieser Ordner ist leer' : tag ? 'Keine Bücher mit diesem Tag' : 'Noch keine Bücher'),
+        h('p', { class: 'muted' }, folderId
+          ? 'Lege hier ein neues Buch an oder verschiebe Bücher über „⋯ → In Ordner verschieben“ hierher.'
+          : 'Lege ein Buch an und fotografiere die Seiten. Lesepixel erkennt den Text und du kannst das Buch danach überall lesen, auch ohne Internet.'),
+        tag ? null : h('button', { class: 'btn primary', onClick: () => newBookDialog(folderId) }, icon('plus'), folderId ? 'Buch hier anlegen' : 'Erstes Buch anlegen'),
       ));
       return;
     }
-    grid.replaceChildren(...books.map((b) => bookTile(b, pool)));
+    grid.replaceChildren(
+      ...subfolders.map((f) => folderTile(f, count(f.id))),
+      ...shown.map((b) => bookTile(b, pool)),
+    );
+  }
+
+  async function runSearch() {
+    const q = query.trim();
+    body.hidden = q.length >= 2;
+    results.hidden = q.length < 2;
+    if (q.length < 2) { results.replaceChildren(); return; }
+    results.replaceChildren(h('p', { class: 'muted small' }, h('span', { class: 'spinner' }), ' Suche …'));
+    const found = await searchLibrary(q, { canOpen: (b) => !b.locked || lock.isUnlocked() || !lock.isConfigured() });
+    if (query.trim() !== q) return;
+    if (!found.length) { results.replaceChildren(h('p', { class: 'muted' }, `Nichts gefunden für „${q}“.`)); return; }
+    const total = found.reduce((s, r) => s + r.total, 0);
+    results.replaceChildren(
+      h('p', { class: 'muted small' }, `${total} ${total === 1 ? 'Treffer' : 'Treffer'} in ${found.length} ${found.length === 1 ? 'Buch' : 'Büchern'}`),
+      ...found.map((r) => h('div', { class: 'sr-book card' },
+        h('button', { class: 'sr-title', onClick: () => openBook(r.book) }, h('strong', {}, r.book.title), r.book.author ? h('span', { class: 'muted small' }, ' · ' + r.book.author) : null,
+          h('span', { class: 'muted small sr-count' }, r.total ? `${r.total}×` : 'im Titel/Tag')),
+        ...r.hits.map((hit) => h('button', { class: 'sr-hit', onClick: async () => {
+          if (!(await lock.ensureBookAccess(r.book))) return;
+          setJump(r.book.id, hit);
+          go('#/read/' + r.book.id);
+        } },
+          h('span', { class: 'sr-page' }, hit.printedNo ? `S. ${hit.printedNo}` : `Foto ${hit.pageIndex + 1}`),
+          h('span', {}, hit.before, h('mark', {}, hit.match), hit.after))),
+        r.total > r.hits.length ? h('p', { class: 'muted small' }, `… und ${r.total - r.hits.length} weitere – im Buch über die Lupe suchen.`) : null,
+      )),
+    );
   }
 
   await fill();
+  if (query) runSearch();
   let t = null;
   const off = db.onChange((e) => {
-    if (!['book', 'pages', 'sync', 'profile'].includes(e.type)) return;
+    if (!['book', 'pages', 'sync', 'profile', 'folder'].includes(e.type)) return;
     clearTimeout(t);
     t = setTimeout(async () => { multiProfile = (await db.getProfiles()).length > 1; showProfile(); fill(); }, 100);
   });
   const offSwitch = profiles.onSwitch(() => { showProfile(); fill(); });
-  return () => { off(); offSwitch(); badge._off(); syncIndicator._off(); pool.clear(); clearTimeout(t); };
+  return () => { off(); offSwitch(); badge._off(); syncIndicator._off(); pool.clear(); clearTimeout(t); clearTimeout(searchTimer); };
+}
+
+async function openBook(book) {
+  if (!(await lock.ensureBookAccess(book))) return;
+  go(book.pageOrder.length ? `#/read/${book.id}` : `#/book/${book.id}`);
+}
+
+function folderTile(f, n) {
+  return h('div', { class: 'tile folder-tile' },
+    h('a', { class: 'tile-main', href: '#/ordner/' + f.id, 'aria-label': `Ordner ${f.name} öffnen` },
+      h('div', { class: 'folder-cover' }, icon('folder'), h('span', { class: 'folder-count' }, n === 1 ? '1 Buch' : `${n} Bücher`)),
+    ),
+    h('div', { class: 'tile-info' },
+      h('div', { class: 'tile-text' }, h('div', { class: 'tile-title' }, f.name)),
+      iconButton('more', 'Ordner bearbeiten', () => folderDialog(f), 'small'),
+    ),
+  );
+}
+
+// Ordner anlegen / umbenennen / löschen
+async function folderDialog(folder, parentId = null) {
+  const name = h('input', { class: 'input', value: folder ? folder.name : '', placeholder: 'Name des Ordners', maxlength: 60 });
+  const s = sheet(folder ? 'Ordner bearbeiten' : 'Neuer Ordner', h('form', { class: 'stack', onSubmit: async (e) => {
+    e.preventDefault();
+    const n = name.value.trim();
+    if (!n) { name.focus(); return; }
+    if (folder) await db.putFolder({ ...folder, name: n });
+    else await db.createFolder(n, parentId);
+    s.close();
+  } },
+    name,
+    h('button', { class: 'btn primary block', type: 'submit' }, folder ? 'Speichern' : 'Ordner anlegen'),
+    folder ? h('button', { type: 'button', class: 'btn danger block', onClick: async () => {
+      if (!(await confirmDialog('Ordner löschen?', 'Die Bücher und Unterordner darin bleiben erhalten und wandern eine Ebene nach oben.', 'Löschen', true))) return;
+      const parent = folder.parentId;
+      await db.deleteFolder(folder.id);
+      s.close();
+      if (location.hash === '#/ordner/' + folder.id) go(parent ? '#/ordner/' + parent : '#/');
+    } }, icon('trash'), 'Ordner löschen') : null,
+  ));
+  setTimeout(() => name.focus(), 250);
+}
+
+// Ordnerauswahl (eingerückt nach Ebene)
+async function folderOptions(selected) {
+  const folders = await db.getFolders();
+  const byParent = new Map();
+  for (const f of folders) {
+    const k = folders.some((x) => x.id === f.parentId) ? f.parentId : null;
+    if (!byParent.has(k)) byParent.set(k, []);
+    byParent.get(k).push(f);
+  }
+  const opts = [h('option', { value: '' }, 'Bibliothek (kein Ordner)')];
+  const walk = (pid, depth) => {
+    for (const f of (byParent.get(pid) || []).sort((a, b) => a.name.localeCompare(b.name, 'de'))) {
+      opts.push(h('option', { value: f.id }, ' '.repeat(depth) + '▸ ' + f.name));
+      walk(f.id, depth + 1);
+    }
+  };
+  walk(null, 1);
+  const sel = h('select', { class: 'input' }, ...opts);
+  sel.value = selected || '';
+  return sel;
+}
+
+// Tag-Eingabe: vorhandene Tags antippen oder neue eintippen (Komma/Enter)
+async function tagEditor(initial) {
+  let tags = [...(initial || [])];
+  const all = new Set();
+  for (const b of await db.getBooks()) for (const t of b.tags || []) all.add(t);
+  const chips = h('div', { class: 'tag-edit' });
+  const input = h('input', { class: 'input', placeholder: 'Tag hinzufügen …', autocomplete: 'off' });
+  const sugg = h('div', { class: 'tag-row' });
+  const norm = (t) => t.replace(/^#/, '').trim().replace(/\s+/g, '-').slice(0, 30);
+  const render = () => {
+    chips.replaceChildren(...tags.map((t) => h('button', { type: 'button', class: 'tag-chip on', onClick: () => { tags = tags.filter((x) => x !== t); render(); } }, '#' + t, ' ×')));
+    sugg.replaceChildren(...[...all].filter((t) => !tags.includes(t)).sort().map((t) => h('button', { type: 'button', class: 'tag-chip', onClick: () => { tags.push(t); render(); } }, '#' + t)));
+  };
+  const add = () => {
+    for (const part of input.value.split(',')) { const t = norm(part); if (t && !tags.includes(t)) tags.push(t); }
+    input.value = '';
+    render();
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add(); } });
+  input.addEventListener('blur', add);
+  render();
+  const el = h('div', { class: 'stack-s' }, chips, input, sugg);
+  el.value = () => { add(); return tags; };
+  return el;
+}
+
+// Erinnerung an die Sicherung
+async function backupReminder() {
+  const books = await db.getBooks();
+  if (!books.length) return null;
+  const last = (await db.getMeta('lastBackupAt', 0)) || 0;
+  let snooze = 0;
+  try { snooze = +localStorage.getItem('ob.backupSnooze') || 0; } catch (e) { /* */ }
+  if (Date.now() < snooze) return null;
+  const changed = books.filter((b) => (b.orderAt || b.createdAt || 0) > last).length;
+  const pages = books.reduce((n, b) => n + b.pageOrder.length, 0);
+  const days = last ? Math.floor((Date.now() - last) / 86400000) : null;
+  const due = last ? (changed && days >= 14) : pages >= 20;
+  if (!due) return null;
+  const card = h('div', { class: 'card notice' },
+    h('strong', {}, 'Zeit für eine Sicherung'),
+    h('p', { class: 'small' }, last
+      ? `Letzte Sicherung vor ${days} Tagen – seitdem ${changed === 1 ? 'hat sich 1 Buch' : `haben sich ${changed} Bücher`} geändert.`
+      : `Du hast ${pages} Seiten gescannt, aber noch keine Sicherung erstellt. Fotos liegen nur auf diesem Gerät.`),
+    h('div', { class: 'row gap-s wrap' },
+      h('button', { class: 'btn small primary', onClick: async () => {
+        const { exportBackup } = await import('./backup.js');
+        toast('Sicherung wird erstellt …');
+        const blob = await exportBackup();
+        download(blob, `lesepixel-sicherung-${new Date().toISOString().slice(0, 10)}.lesepixel.zip`);
+        card.remove();
+      } }, icon('download'), 'Jetzt sichern'),
+      h('button', { class: 'btn small', onClick: () => { try { localStorage.setItem('ob.backupSnooze', String(Date.now() + 7 * 86400000)); } catch (e) { /* */ } card.remove(); } }, 'In einer Woche erinnern'),
+    ),
+  );
+  return card;
 }
 
 export function coverEl(book, pool, cls = '') {
@@ -209,9 +423,10 @@ function bookTile(book, pool) {
     h('button', {
       class: 'tile-main',
       'aria-label': `${book.title} öffnen`,
-      onClick: () => go(n ? `#/read/${book.id}` : `#/book/${book.id}`),
+      onClick: () => openBook(book),
     },
-      coverEl(book, pool),
+      coverEl(book, pool, book.locked && lock.isConfigured() ? 'locked' : ''),
+      book.locked && lock.isConfigured() ? h('span', { class: 'lock-badge' }, icon('lock')) : null,
       h('div', { class: 'progress' }, h('div', { style: { width: pct + '%' } })),
     ),
     h('div', { class: 'tile-info' },
@@ -219,14 +434,14 @@ function bookTile(book, pool) {
         h('div', { class: 'tile-title' }, book.title),
         h('div', { class: 'tile-meta' }, n ? `${pct} % · ${n} S.` : 'Noch keine Seiten'),
       ),
-      iconButton('more', 'Buchdetails', () => go(`#/book/${book.id}`), 'small'),
+      iconButton('more', 'Buchdetails', async () => { if (await lock.ensureBookAccess(book)) go(`#/book/${book.id}`); }, 'small'),
     ),
   );
 }
 
 // ---------- Neues Buch ----------
 
-function newBookDialog() {
+function newBookDialog(folderId = null) {
   let coverBlob = null;
   const pool = new UrlPool();
   const title = h('input', { class: 'input', placeholder: 'Titel', required: true, autocomplete: 'off' });
@@ -242,6 +457,7 @@ function newBookDialog() {
     e.preventDefault();
     if (!title.value.trim()) { title.focus(); return; }
     const book = await db.createBook({ title: title.value.trim(), author: author.value.trim(), cover: coverBlob });
+    if (folderId) await db.updateBook(book.id, { folderId });
     db.requestPersistence();
     s.close();
     go(`#/scan/${book.id}`);
@@ -260,6 +476,7 @@ async function renderBook(bookId) {
   const pool = new UrlPool();
   let book = await db.getBook(bookId);
   if (!book) { go('#/'); return; }
+  if (!(await lock.ensureBookAccess(book))) { go('#/'); return; }
   const badge = ocrBadge();
   const head = h('div', { class: 'book-head' });
   const pagesGrid = h('div', { class: 'pages-grid' });
@@ -267,7 +484,7 @@ async function renderBook(bookId) {
 
   const view = h('div', { class: 'page book' },
     h('header', { class: 'topbar' },
-      iconButton('back', 'Zurück', () => go('#/')),
+      iconButton('back', 'Zurück', () => go(book.folderId ? '#/ordner/' + book.folderId : '#/')),
       h('div', { class: 'grow' }),
       iconButton('more', 'Weitere Aktionen', () => bookActions()),
     ),
@@ -316,8 +533,9 @@ async function renderBook(bookId) {
         h('h1', {}, book.title),
         book.author ? h('p', { class: 'author' }, book.author) : null,
         h('p', { class: 'muted small' },
-          `${pages.length} ${pages.length === 1 ? 'Seite' : 'Seiten'} · ${done} erkannt` + (errs ? ` · ${errs} Fehler` : '') + (words ? ` · ca. ${Math.max(1, Math.round(words / 250))} Min. Lesezeit` : ''),
+          `${pages.length} ${pages.length === 1 ? 'Seite' : 'Seiten'} · ${done} erkannt` + (errs ? ` · ${errs} Fehler` : '') + (words ? ` · ca. ${Math.max(1, Math.round(words / 250))} Min. Lesezeit` : '') + ` · ${fmtBytes((await bookSize(bookId)).total)}`,
         ),
+        await metaChips(),
         h('div', { class: 'row gap-s wrap' },
           pages.length ? h('button', { class: 'btn primary', onClick: () => go(`#/read/${bookId}`) }, icon('book'), state && state.position ? 'Weiterlesen' : 'Lesen') : null,
           h('button', { class: 'btn', onClick: () => go(`#/scan/${bookId}`) }, icon('camera'), 'Seiten scannen'),
@@ -373,9 +591,26 @@ async function renderBook(bookId) {
     );
   }
 
+  async function metaChips() {
+    const folder = book.folderId ? await db.getFolder(book.folderId) : null;
+    const items = [];
+    if (folder) items.push(h('a', { class: 'tag-chip folder-chip', href: '#/ordner/' + folder.id }, icon('folder'), folder.name));
+    for (const t of book.tags || []) items.push(h('a', { class: 'tag-chip', href: '#/tag/' + encodeURIComponent(t) }, '#' + t));
+    if (book.locked && lock.isConfigured()) items.push(h('span', { class: 'tag-chip' }, icon('lock'), 'gesperrt'));
+    return items.length ? h('div', { class: 'tag-row' }, ...items) : null;
+  }
+
   function bookActions() {
     const s = sheet('Buch', h('div', { class: 'menu' },
-      h('button', { class: 'menu-item', onClick: () => { s.close(); editMeta(); } }, icon('edit'), 'Titel, Autor & Cover bearbeiten'),
+      h('button', { class: 'menu-item', onClick: () => { s.close(); editMeta(); } }, icon('edit'), 'Titel, Autor, Cover, Ordner & Tags'),
+      h('button', { class: 'menu-item', onClick: async () => {
+        s.close();
+        const sel = await folderOptions(book.folderId);
+        const m = sheet('In Ordner verschieben', h('div', { class: 'stack' }, sel,
+          h('button', { class: 'btn primary block', onClick: async () => { await db.updateBook(bookId, { folderId: sel.value || null }); m.close(); toast('Verschoben'); } }, icon('folder'), 'Verschieben'),
+          h('button', { class: 'btn block', onClick: () => { m.close(); folderDialog(null, null); } }, icon('folderPlus'), 'Neuen Ordner anlegen')));
+      } }, icon('folder'), 'In Ordner verschieben'),
+      h('button', { class: 'menu-item', onClick: () => { s.close(); storageDialog(); } }, icon('storage'), 'Speicher sparen'),
       h('button', { class: 'menu-item', onClick: async () => {
         s.close();
         const { exportEpub } = await import('./epub.js');
@@ -415,7 +650,35 @@ async function renderBook(bookId) {
     ));
   }
 
-  function editMeta() {
+  async function storageDialog() {
+    const size = await bookSize(bookId);
+    const pages = await db.getPagesMeta(bookId);
+    const notDone = pages.filter((p) => p.image && p.ocrStatus !== 'done').length;
+    const status = h('p', { class: 'muted small' });
+    const s = sheet('Speicher sparen', h('div', { class: 'stack' },
+      h('p', {}, `Dieses Buch belegt ${fmtBytes(size.total)}, davon Seitenfotos ${fmtBytes(size.photos)}.`),
+      h('div', { class: 'card' },
+        h('strong', {}, 'Fotos verkleinern'),
+        h('p', { class: 'muted small' }, 'Fotos werden auf eine kleinere Größe gebracht. Die Originalansicht bleibt gut lesbar, spart meist 50–70 %.'),
+        h('button', { class: 'btn small', disabled: !size.photos, onClick: async () => {
+          status.textContent = 'Wird verkleinert …';
+          const saved = await shrinkPhotos(bookId, (r) => { status.textContent = `Wird verkleinert … ${Math.round(r * 100)} %`; });
+          status.textContent = `Fertig – ${fmtBytes(saved)} gespart.`;
+        } }, 'Verkleinern')),
+      h('div', { class: 'card' },
+        h('strong', {}, 'Fotos löschen, Text behalten'),
+        h('p', { class: 'muted small' }, 'Nur der erkannte Text, Abbildungen und kleine Vorschaubilder bleiben. Die Originalansicht und „Neu erkennen“ gehen danach nicht mehr.' + (notDone ? ` ${notDone} noch nicht erkannte Seiten behalten ihr Foto.` : '')),
+        h('button', { class: 'btn small danger', disabled: !size.photos, onClick: async () => {
+          if (!(await confirmDialog('Fotos löschen?', 'Das lässt sich nicht rückgängig machen. Tipp: vorher „Buch sichern“.', 'Fotos löschen', true))) return;
+          const saved = await deletePhotos(bookId);
+          status.textContent = `Fertig – ${fmtBytes(saved)} frei.`;
+        } }, icon('trash'), 'Fotos löschen')),
+      status,
+    ));
+    void s;
+  }
+
+  async function editMeta() {
     let cover = book.cover;
     const p2 = new UrlPool();
     const title = h('input', { class: 'input', value: book.title });
@@ -423,9 +686,15 @@ async function renderBook(bookId) {
     const prev = h('div', { class: 'cover-pick' });
     const showPrev = () => prev.replaceChildren(cover ? h('img', { src: p2.get(cover), alt: '' }) : h('span', {}, icon('camera'), ' Cover fotografieren'));
     showPrev();
+    const folderSel = await folderOptions(book.folderId);
+    const tagsEl = await tagEditor(book.tags);
+    const lockBox = lock.isConfigured() ? h('input', { type: 'checkbox', checked: !!book.locked }) : null;
     const s = sheet('Buch bearbeiten', h('form', { class: 'stack', onSubmit: async (e) => {
       e.preventDefault();
-      await db.updateBook(bookId, { title: title.value.trim() || book.title, author: author.value.trim(), cover });
+      await db.updateBook(bookId, {
+        title: title.value.trim() || book.title, author: author.value.trim(), cover,
+        folderId: folderSel.value || null, tags: tagsEl.value(), locked: lockBox ? lockBox.checked : !!book.locked,
+      });
       s.close();
     } },
       h('button', { type: 'button', class: 'cover-pick-btn', onClick: async () => {
@@ -442,6 +711,11 @@ async function renderBook(bookId) {
         cover ? h('button', { type: 'button', class: 'btn small', onClick: () => { cover = null; showPrev(); } }, 'Cover entfernen') : null,
       ),
       title, author,
+      h('label', { class: 'stack-s small' }, h('strong', {}, 'Ordner'), folderSel),
+      h('div', { class: 'stack-s small' }, h('strong', {}, 'Tags'), tagsEl),
+      lockBox
+        ? h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Buch sperren'), h('br'), h('span', { class: 'muted small' }, 'Öffnen nur mit Face ID oder PIN')), lockBox)
+        : h('p', { class: 'muted small' }, 'Bücher sperren: zuerst unter Einstellungen → App-Sperre Face ID bzw. eine PIN einrichten.'),
       h('button', { class: 'btn primary block', type: 'submit' }, 'Speichern'),
     ), { onClose: () => p2.clear() });
   }
@@ -466,8 +740,10 @@ async function openSettings() {
     onChange: (e) => localStorage.setItem('ob.scanFilter', e.target.checked ? '1' : '0') });
 
   const syncEl = syncCard();
+  const lockEl = await lockCard();
   const s = sheet('Einstellungen', h('div', { class: 'stack' },
     syncEl,
+    lockEl,
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Scan-Filter'), h('br'), h('span', { class: 'muted small' }, 'Fotos in Graustufen mit hellem Papier speichern. Bessere Erkennung, weniger Speicher.')), scanFilter),
     h('div', { class: 'card' },
       h('strong', {}, 'Speicher'),
@@ -525,6 +801,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 (async () => {
   try {
     await profiles.ensureProfile();
+    lock.init();
     await sync.init(); // verarbeitet ggf. die Rückkehr von der Anmeldeseite
   } catch (e) {
     console.error(e);
@@ -666,5 +943,69 @@ function usageCard() {
       h('a', { class: 'btn small', href: '#/rechtliches' }, 'Mehr erfahren'),
     ),
   );
+  return card;
+}
+
+// ---------- App-Sperre (Einstellungen) ----------
+
+async function lockCard() {
+  const card = h('div', { class: 'card' });
+  const bio = await lock.biometricsAvailable();
+  const render = () => {
+    card.replaceChildren(h('strong', {}, icon('lock'), ' App-Sperre'));
+    if (!lock.isConfigured()) {
+      card.append(
+        h('p', { class: 'muted small' }, 'Lesepixel beim Öffnen mit Face ID / Touch ID oder PIN schützen – sinnvoll bei Unterlagen mit vertraulichen Daten. Einzelne Bücher lassen sich zusätzlich sperren.'),
+        h('button', { class: 'btn small', onClick: setupDialog }, icon('lock'), 'App-Sperre einrichten'),
+      );
+      return;
+    }
+    const st = lock.settings();
+    const delaySel = h('select', { class: 'select', onChange: (e) => lock.setDelay(+e.target.value) },
+      ...[[0, 'sofort'], [1, 'nach 1 Minute'], [5, 'nach 5 Minuten'], [15, 'nach 15 Minuten']].map(([v, t]) => h('option', { value: v }, t)));
+    delaySel.value = String(st.delay ?? 1);
+    card.append(
+      h('p', { class: 'muted small' }, (lock.hasBiometrics() ? 'Face ID / Touch ID und PIN' : 'PIN') + ' eingerichtet.' + (st.enabled ? '' : ' Nur gesperrte Bücher sind geschützt.')),
+      h('label', { class: 'switch-row small' }, h('span', {}, 'Ganze App beim Öffnen sperren'),
+        h('input', { type: 'checkbox', checked: !!st.enabled, onChange: (e) => { const c = lock.settings(); c.enabled = e.target.checked; localStorage.setItem('ob.lock', JSON.stringify(c)); render(); } })),
+      st.enabled ? h('label', { class: 'row gap-s small' }, 'Nach Wechsel in den Hintergrund sperren:', delaySel) : null,
+      h('div', { class: 'row gap-s wrap' },
+        h('button', { class: 'btn small', onClick: () => lock.lockNow() }, 'Jetzt sperren'),
+        h('button', { class: 'btn small', onClick: async () => {
+          if (!(await lock.lockNow('Zum Ausschalten bitte bestätigen.'))) return;
+          lock.disable(); render(); toast('App-Sperre ausgeschaltet');
+        } }, 'Ausschalten')),
+      h('p', { class: 'muted small' }, 'Hinweis: Die Sperre schützt vor neugierigen Blicken. Sie verschlüsselt die Daten im Browser-Speicher nicht.'),
+    );
+  };
+  const setupDialog = () => {
+    const pin = h('input', { class: 'input', type: 'password', inputmode: 'numeric', autocomplete: 'new-password', placeholder: 'PIN (mind. 4 Ziffern)' });
+    const pin2 = h('input', { class: 'input', type: 'password', inputmode: 'numeric', autocomplete: 'new-password', placeholder: 'PIN wiederholen' });
+    const useBio = h('input', { type: 'checkbox', checked: bio, disabled: !bio });
+    const whole = h('input', { type: 'checkbox', checked: true });
+    const msg = h('p', { class: 'muted small' });
+    const s = sheet('App-Sperre einrichten', h('form', { class: 'stack', onSubmit: async (e) => {
+      e.preventDefault();
+      if (!/^\d{4,}$/.test(pin.value)) { msg.textContent = 'Bitte mindestens 4 Ziffern.'; return; }
+      if (pin.value !== pin2.value) { msg.textContent = 'Die PINs stimmen nicht überein.'; return; }
+      try {
+        await lock.setup({ pin: pin.value, biometrics: useBio.checked, delay: 1 });
+        if (!whole.checked) { const c = lock.settings(); c.enabled = false; localStorage.setItem('ob.lock', JSON.stringify(c)); }
+        s.close(); render(); toast('App-Sperre eingerichtet');
+      } catch (err) {
+        msg.textContent = 'Face ID konnte nicht eingerichtet werden (' + (err.name || err.message) + '). Du kannst die Sperre auch nur mit PIN nutzen.';
+        useBio.checked = false;
+      }
+    } },
+      h('p', { class: 'muted small' }, 'Die PIN brauchst du, falls Face ID einmal nicht klappt.'),
+      pin, pin2,
+      h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Face ID / Touch ID verwenden'), h('br'), h('span', { class: 'muted small' }, bio ? 'Wird gleich einmal abgefragt.' : 'Auf diesem Gerät nicht verfügbar.')), useBio),
+      h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Ganze App sperren'), h('br'), h('span', { class: 'muted small' }, 'Sonst nur Bücher, die du als „gesperrt“ markierst.')), whole),
+      msg,
+      h('button', { class: 'btn primary block', type: 'submit' }, 'Einrichten'),
+    ));
+    setTimeout(() => pin.focus(), 250);
+  };
+  render();
   return card;
 }

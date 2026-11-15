@@ -7,6 +7,8 @@ import { h, icon, iconButton, toast, sheet, UrlPool } from './ui.js';
 import { buildFlow } from './textproc.js';
 import { displayNumbers } from './pagecheck.js';
 import { renderInline } from './rich.js';
+import { ensureBookAccess } from './lock.js';
+import { takeJump } from './search.js';
 
 const SECTION_PAGES = 25; // Buchseiten je gerendertem Abschnitt (hält das Layout schnell)
 const CHARS_PER_MIN = 1300; // ca. 230 Wörter/Minute
@@ -30,6 +32,7 @@ function saveSettings(s) { profiles.saveSettings(s); }
 export async function openReader(root, bookId) {
   let book = await db.getBook(bookId);
   if (!book) { location.hash = '#/'; return; }
+  if (!(await ensureBookAccess(book))) { location.hash = '#/'; return; }
   let pages = await db.getPagesMeta(bookId);
   if (!pages.length) { location.hash = `#/book/${bookId}`; return; }
   const profileId = profiles.currentId();
@@ -845,6 +848,20 @@ export async function openReader(root, bookId) {
   await loadFigures();
   rebuildFlow();
   restore();
+  // Sprung aus der Suche über alle Bücher
+  const jump = takeJump(bookId);
+  if (jump && settings.mode === 'text') {
+    let fi = flow.findIndex((f) => f.pageId === jump.pageId && f.p === jump.p);
+    let char = jump.char;
+    if (fi < 0) {
+      fi = flow.findIndex((f) => f.continues && f.continues.some((c) => c.pageId === jump.pageId));
+      if (fi >= 0) char += flow[fi].continues.find((c) => c.pageId === jump.pageId).offset;
+    }
+    if (fi >= 0) { userNav(); goToFlow(fi, char); }
+  } else if (jump) {
+    const pi = pages.findIndex((p) => p.id === jump.pageId);
+    if (pi >= 0) { userNav(); renderImage(pi); }
+  }
   try {
     if (!localStorage.getItem('ob.hint')) {
       localStorage.setItem('ob.hint', '1');

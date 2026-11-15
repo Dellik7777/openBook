@@ -153,7 +153,7 @@ export function syncNow({ interactive = false } = {}) {
 // ---------- Abgleich ----------
 
 const LIB = 'library.json';
-const emptyLib = () => ({ format: 'openbook-sync', version: 1, profiles: {}, books: {}, states: {}, tombstones: { books: {}, pages: {}, profiles: {}, figures: {} } });
+const emptyLib = () => ({ format: 'openbook-sync', version: 1, profiles: {}, books: {}, states: {}, folders: {}, tombstones: { books: {}, pages: {}, profiles: {}, figures: {}, folders: {} } });
 
 async function runOnce() {
   await provider.begin();
@@ -176,6 +176,15 @@ async function runOnce() {
     const tomb = await db.getTombstones();
     for (const id of Object.keys(tomb.books)) {
       if (await db.getBook(id)) { await db.purgeBook(id); changedBooks.add(id); }
+    }
+    for (const id of Object.keys(tomb.folders || {})) {
+      if (await db.getFolder(id)) { await db.deleteFolderRaw(id); changedOther = true; }
+    }
+    // Ordner (jüngste Änderung gewinnt)
+    for (const [id, rf] of Object.entries(lib.folders || {})) {
+      if ((tomb.folders || {})[id]) continue;
+      const lf = await db.getFolder(id);
+      if (!lf || (rf.updatedAt || 0) > (lf.updatedAt || 0)) { await db.putFolder({ ...rf, id }, { raw: true, silent: true }); changedOther = true; }
     }
     for (const id of Object.keys(tomb.profiles)) {
       if (await db.getProfile(id)) { await db.deleteProfile(id, { tombstone: false }); changedOther = true; }
@@ -204,11 +213,13 @@ async function runOnce() {
         const cover = rb.coverId ? await downloadCover(rb.coverId) : null;
         await db.putBookRaw({
           id, title: rb.title, author: rb.author || '', cover, coverId: cover ? rb.coverId : null, ignoredGaps: rb.ignoredGaps || [],
+          folderId: rb.folderId || null, tags: rb.tags || [], locked: !!rb.locked,
           pageOrder: [], createdAt: rb.createdAt || Date.now(), updatedAt: Date.now(), metaAt: rb.metaAt || 0, orderAt: 0,
         }, { silent: true });
         changedBooks.add(id);
       } else if ((rb.metaAt || 0) > (lb.metaAt || 0)) {
         lb.title = rb.title; lb.author = rb.author || ''; lb.metaAt = rb.metaAt; lb.ignoredGaps = rb.ignoredGaps || [];
+        lb.folderId = rb.folderId || null; lb.tags = rb.tags || []; lb.locked = !!rb.locked;
         if (rb.coverId !== lb.coverId) {
           lb.cover = rb.coverId ? await downloadCover(rb.coverId) : null;
           lb.coverId = lb.cover ? rb.coverId : null;
@@ -315,9 +326,11 @@ async function downloadCover(coverId) {
 async function buildLibrary() {
   const lib = emptyLib();
   for (const p of await db.getProfiles()) lib.profiles[p.id] = p;
+  for (const f of await db.getFolders()) lib.folders[f.id] = f;
   for (const b of await db.getBooks()) {
     lib.books[b.id] = {
       id: b.id, title: b.title, author: b.author || '', coverId: b.cover ? b.coverId : null, ignoredGaps: b.ignoredGaps || [],
+      folderId: b.folderId || null, tags: b.tags || [], locked: !!b.locked,
       createdAt: b.createdAt, metaAt: b.metaAt || 0, contentV: await contentVersion(b.id),
     };
   }

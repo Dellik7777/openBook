@@ -1,6 +1,7 @@
 // Bildschirme „Buch senden“ und „Buch empfangen“ (Direktübertragung per WLAN/Hotspot).
 
 import * as db from './db.js';
+import { ensureBookAccess } from './lock.js';
 import { h, icon, iconButton, toast } from './ui.js';
 import { createSender, createReceiver, decodeSignal, qrCanvas, startScanner, sendBlob, receiveBlob, wifiPayload } from './transfer.js';
 
@@ -60,6 +61,7 @@ function wifiCard() {
 export async function openSend(root, bookId) {
   const book = await db.getBook(bookId);
   if (!book) { location.hash = '#/'; return; }
+  if (!(await ensureBookAccess(book))) { location.hash = '#/'; return; }
   const pages = await db.getPagesMeta(bookId);
   const photoBytes = pages.reduce((s, p) => s + (p.image ? p.image.size + (p.thumb ? p.thumb.size : 0) : 0), 0);
   let photos = localStorage.getItem('ob.sendPhotos') !== '0';
