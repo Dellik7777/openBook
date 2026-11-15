@@ -1,6 +1,7 @@
 // Bildverarbeitung für Buchseiten: Skalieren, Scan-Filter, Teilen, Drehen, Zuschneiden.
 
-import { detectPage, warpPerspective, flattenCurl } from './pagedetect.js';
+import { detectPage, warpPerspective, flattenCurl, findGutter } from './pagedetect.js';
+import { dewarpText } from './dewarp.js';
 
 const MAX_EDGE = 2200;   // lange Kante gespeicherter Seiten (gut lesbar + gute OCR)
 const THUMB_EDGE = 320;
@@ -143,36 +144,71 @@ export async function makeThumb(src) {
 }
 
 // Erzeugt aus einer Aufnahme (Video-Frame, Canvas, Blob) eine oder zwei Seiten.
-// Ergebnis: [{ image: Blob, thumb: Blob }]
-export async function processCapture(source, { split = false, scanFilter = true, autoCrop = true } = {}) {
+// Ergebnis: [{ image, thumb, cropped, orig, quad, filtered }]
+//   orig/quad: unbearbeitetes Foto (verkleinert) und die verwendeten Ecken (relativ) –
+//   damit lassen sich die Ecken später im Editor frei nachstellen.
+// quad (Option): Ecken von Hand (relativ 0..1) statt automatischer Erkennung
+export async function processCapture(source, { split = false, scanFilter = true, autoCrop = true, quad = null } = {}) {
   let src = source instanceof Blob ? await loadBitmap(source) : source;
-  let cropped = false;
-  if (autoCrop) {
-    // Seite im Foto finden, Perspektive entzerren, Wölbung glätten
+  const { w: W0, h: H0 } = dims(src);
+  let used = null;
+  if (quad && !isFullQuad(quad)) used = quad;
+  else if (!quad && autoCrop) {
     try {
-      const det = detectPage(src);
-      if (det) {
-        const warped = flattenCurl(warpPerspective(src, det.quad, split ? MAX_EDGE * 1.6 : MAX_EDGE));
-        if (src.close) try { src.close(); } catch (e) { /* */ }
-        src = warped;
-        cropped = true;
-      }
+      const det = detectPage(src, { spread: split });
+      if (det) used = det.quad.map(([x, y]) => [x / W0, y / H0]);
     } catch (e) { console.warn('Seitenerkennung übersprungen', e); }
   }
+  // Original für „Ecken anpassen“ (nur Einzelseiten; bei Doppelseiten die entzerrte Hälfte)
+  const origBlob = split ? null : await toBlob(drawScaled(src, 0, 0, W0, H0, ORIG_EDGE), 'image/jpeg', 0.75);
+  let cropped = false;
+  if (used) {
+    try {
+      let warped = warpPerspective(src, used.map(([x, y]) => [x * W0, y * H0]), split ? MAX_EDGE * 1.6 : MAX_EDGE);
+      if (!split) warped = flattenCurl(warped);
+      if (src.close) try { src.close(); } catch (e) { /* */ }
+      src = warped;
+      cropped = true;
+    } catch (e) { console.warn('Entzerren übersprungen', e); used = null; }
+  }
   const { w, h } = dims(src);
-  const parts = split
-    ? [[0, 0, Math.floor(w / 2), h], [Math.floor(w / 2), 0, w - Math.floor(w / 2), h]]
-    : [[0, 0, w, h]];
+  let parts = [[0, 0, w, h]];
+  if (split) {
+    // am Bundsteg teilen, nicht stur in der Mitte
+    let gx = Math.floor(w / 2);
+    try { gx = findGutter(src); } catch (e) { console.warn('Bundsteg nicht gefunden', e); }
+    gx = Math.max(Math.round(w * 0.3), Math.min(Math.round(w * 0.7), gx));
+    parts = [[0, 0, gx, h], [gx, 0, w - gx, h]];
+  }
   const out = [];
   for (const [sx, sy, sw, sh] of parts) {
-    const c = drawScaled(src, sx, sy, sw, sh, MAX_EDGE);
+    let c = drawScaled(src, sx, sy, sw, sh, MAX_EDGE);
+    const orig = split ? await toBlob(drawScaled(c, 0, 0, c.width, c.height, ORIG_EDGE), 'image/jpeg', 0.75) : origBlob;
+    // Gewölbte Textzeilen gerade ziehen (nicht bei Abbildungen in Farbe)
+    if (scanFilter) { try { c = dewarpText(c) || c; } catch (e) { console.warn('Zeilen geradeziehen übersprungen', e); } }
     if (scanFilter) enhance(c);
     const image = await toBlob(c);
     const thumb = await makeThumb(c);
-    out.push({ image, thumb, cropped });
+    out.push({ image, thumb, cropped, orig, quad: split ? null : (used || FULL_QUAD), filtered: !!scanFilter });
   }
   if (src.close) try { src.close(); } catch (e) { /* ignorieren */ }
   return out;
+}
+
+const ORIG_EDGE = 1600;
+const FULL_QUAD = [[0, 0], [1, 0], [1, 1], [0, 1]];
+const isFullQuad = (q) => q.every(([x, y], i) => Math.abs(x - FULL_QUAD[i][0]) < 0.002 && Math.abs(y - FULL_QUAD[i][1]) < 0.002);
+
+// Seite mit neuen Ecken aus dem Original neu erzeugen (Editor „Ecken anpassen“)
+export async function rewarp(orig, quad, { scanFilter = true } = {}) {
+  const src = await loadBitmap(orig);
+  const { w, h } = dims(src);
+  let c = isFullQuad(quad) ? drawScaled(src, 0, 0, w, h, MAX_EDGE) : warpPerspective(src, quad.map(([x, y]) => [x * w, y * h]), MAX_EDGE);
+  if (scanFilter) { try { c = dewarpText(c) || c; } catch (e) { /* */ } enhance(c); }
+  const image = await toBlob(c);
+  const thumb = await makeThumb(c);
+  if (src.close) try { src.close(); } catch (e) { /* */ }
+  return { image, thumb };
 }
 
 // Grabbt das aktuelle Videobild in voller Auflösung.

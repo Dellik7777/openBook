@@ -4,7 +4,7 @@ import * as db from './db.js';
 import { ensureBookAccess } from './lock.js';
 import * as ocr from './ocr.js';
 import { h, icon, iconButton, toast, confirmDialog, UrlPool } from './ui.js';
-import { rotate, crop, cropFigure } from './imageproc.js';
+import { rotate, crop, cropFigure, rewarp } from './imageproc.js';
 
 export async function openPageEditor(root, bookId, pageId) {
   const pool = new UrlPool();
@@ -37,6 +37,7 @@ export async function openPageEditor(root, bookId, pageId) {
   const imgTools = [
     h('button', { class: 'btn small', onClick: () => doRotate(-90) }, icon('rotate', 'flip'), 'Links'),
     h('button', { class: 'btn small', onClick: () => doRotate(90) }, icon('rotate'), 'Rechts'),
+    h('button', { class: 'btn small', onClick: () => adjustCorners() }, icon('crop'), 'Ecken anpassen'),
     h('button', { class: 'btn small', onClick: () => startCrop('crop') }, icon('crop'), 'Zuschneiden'),
     h('button', { class: 'btn small', onClick: () => startCrop('figure') }, icon('figure'), 'Abbildung markieren'),
     h('button', { class: 'btn small', onClick: () => wholePageFigure() }, icon('image'), 'Ganze Seite ist Abbildung'),
@@ -197,6 +198,33 @@ export async function openPageEditor(root, bookId, pageId) {
     toast('Wird gedreht …');
     const r = await rotate(page.image, deg);
     page = await db.updatePage(pageId, { ...r });
+    render();
+    askRerun();
+  }
+
+  // Ecken frei einstellen: aus dem unbearbeiteten Original (falls vorhanden) neu entzerren,
+  // sonst das aktuelle Foto perspektivisch zuschneiden
+  async function adjustCorners() {
+    const full = await db.getPage(pageId);
+    const base = full.orig || full.image;
+    if (!base) return;
+    const { openCornerEditor } = await import('./corners.js');
+    const { detectPage } = await import('./pagedetect.js');
+    const fromOrig = !!full.orig;
+    const quad = await openCornerEditor(base, fromOrig ? full.quad : null, {
+      autoDetect: async () => {
+        const bmp = await createImageBitmap(base);
+        const d = detectPage(bmp);
+        const res = d ? d.quad.map(([x, y]) => [x / bmp.width, y / bmp.height]) : null;
+        bmp.close && bmp.close();
+        return res;
+      },
+    });
+    if (!quad) return;
+    if (!(await confirmDropFigures())) return;
+    toast('Seite wird neu entzerrt …');
+    const r = await rewarp(base, quad, { scanFilter: fromOrig && full.filtered !== false });
+    page = await db.updatePage(pageId, { ...r, ...(fromOrig ? { quad } : { orig: base, quad }) });
     render();
     askRerun();
   }

@@ -2,7 +2,7 @@
 // App-Dateien: zuerst aus dem Cache, im Hintergrund aktualisieren.
 // OCR-Engine & Sprachdaten (groß, ändern sich nie): Cache zuerst.
 
-const VERSION = 'v12';
+const VERSION = 'v13';
 const SHELL = `openbook-shell-${VERSION}`;
 const VENDOR = 'openbook-vendor-v1';
 
@@ -46,6 +46,8 @@ const SHELL_FILES = [
   'js/cards.js',
   'js/cardsview.js',
   'js/vault.js',
+  'js/dewarp.js',
+  'js/corners.js',
   'js/config.js',
   'js/sync/sync.js',
   'js/sync/oauth.js',

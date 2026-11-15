@@ -531,7 +531,7 @@ function newBookDialog(folderId = null) {
     isbnInfo.replaceChildren(h('span', { class: 'spinner' }), ` ISBN ${code} – suche Titel …`);
     try {
       const r = await lookupIsbn(code);
-      if (!r) { isbnInfo.textContent = `ISBN ${code}: kein Eintrag gefunden. Bitte Titel eintippen.`; title.focus(); return; }
+      if (!r) { isbnInfo.textContent = `ISBN ${code} gelesen, aber in keinem Katalog gefunden (oder keine Verbindung). Bitte Titel eintippen – die ISBN wird trotzdem gespeichert.`; title.focus(); return; }
       title.value = r.title;
       author.value = r.author || author.value;
       if (r.cover) { coverBlob = await processCover(r.cover); preview.replaceChildren(h('img', { src: pool.get(coverBlob), alt: 'Cover' })); }
@@ -557,7 +557,7 @@ function newBookDialog(folderId = null) {
     h('button', { type: 'button', class: 'cover-pick-btn', onClick: pickCover }, preview),
     title, author,
     h('button', { class: 'btn primary block', type: 'submit' }, icon('camera'), 'Anlegen & Seiten scannen'),
-    h('p', { class: 'muted small' }, 'ISBN scannen sucht Titel, Autor und Cover online (es wird nur die ISBN an Open Library bzw. Google Books gesendet).'),
+    h('p', { class: 'muted small' }, 'ISBN scannen sucht Titel, Autor und Cover online (es wird nur die ISBN an Open Library, die Deutsche Nationalbibliothek, lobid und Google Books gesendet).'),
   );
   const s = sheet('Neues Buch', form, { onClose: () => pool.clear() });
   setTimeout(() => title.focus(), 250);
@@ -960,6 +960,9 @@ async function openSettings() {
     h('a', { class: 'card card-link', href: '#/lernen', onClick: () => s.close() }, h('strong', {}, icon('cards'), ' Lernkarten'), h('span', { class: 'muted small' }, 'Aus deinen Markierungen in allen Büchern – mit Wiederholung nach dem Karteikasten-Prinzip')),
     lockEl,
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Seiten gerade rücken'), h('br'), h('span', { class: 'muted small' }, 'Seite im Foto finden, Tisch abschneiden, schräge Aufnahmen und Wölbung zur Buchmitte ausgleichen.')), autoCropBox),
+    h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Sprache der Texterkennung'), h('br'), h('span', { class: 'muted small' }, 'Nur Deutsch erkennt Umlaute am besten. „Text neu erkennen“ im Buchmenü wendet die Änderung auf vorhandene Seiten an.')),
+      (() => { const sel = h('select', { class: 'select', onChange: (e) => { ocr.setLanguages(e.target.value); toast('Sprache: ' + ocr.LANG_OPTIONS[e.target.value]); } },
+        ...Object.entries(ocr.LANG_OPTIONS).map(([k, v]) => h('option', { value: k }, v))); sel.value = ocr.getLanguages(); return sel; })()),
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Scan-Filter'), h('br'), h('span', { class: 'muted small' }, 'Fotos in Graustufen mit hellem Papier speichern. Bessere Erkennung, weniger Speicher.')), scanFilter),
     h('div', { class: 'card' },
       h('strong', {}, 'Speicher'),

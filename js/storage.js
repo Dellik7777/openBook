@@ -6,7 +6,7 @@ import { loadBitmap, toBlob, makeThumb } from './imageproc.js';
 export async function bookSize(bookId) {
   let photos = 0, other = 0;
   for (const p of await db.getPagesOfBook(bookId)) {
-    photos += (p.image ? p.image.size : 0);
+    photos += (p.image ? p.image.size : 0) + (p.orig ? p.orig.size : 0);
     other += (p.thumb ? p.thumb.size : 0) + (p.text ? p.text.length * 2 : 0);
   }
   for (const f of await db.getFiguresOfBook(bookId)) other += f.image ? f.image.size : 0;
@@ -37,7 +37,9 @@ export async function shrinkPhotos(bookId, onProgress) {
     const img = await toBlob(c, 'image/jpeg', 0.6);
     if (img.size < p.image.size) {
       saved += p.image.size - img.size;
-      await db.putPage({ ...p, image: img, imageAt: Date.now(), thumb: p.thumb || await makeThumb(c) }, { silent: true });
+      // Verkleinern: auch das unbearbeitete Original (für „Ecken anpassen“) entfällt
+      saved += p.orig ? p.orig.size : 0;
+      await db.putPage({ ...p, image: img, orig: null, imageAt: Date.now(), thumb: p.thumb || await makeThumb(c) }, { silent: true });
     }
     onProgress && onProgress((i + 1) / pages.length);
   }
@@ -52,7 +54,8 @@ export async function deletePhotos(bookId) {
     if (!p.image) continue;
     if (p.ocrStatus !== 'done') continue; // ohne erkannten Text wäre die Seite verloren
     saved += p.image.size;
-    await db.putPage({ ...p, image: null, photoDeleted: true }, { silent: true }); // nicht wieder aus der Cloud laden
+    saved += p.orig ? p.orig.size : 0;
+    await db.putPage({ ...p, image: null, orig: null, photoDeleted: true }, { silent: true }); // nicht wieder aus der Cloud laden
   }
   db.emit('pages', bookId);
   return saved;
