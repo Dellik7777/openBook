@@ -1,0 +1,94 @@
+// Service Worker: macht openBook offline nutzbar.
+// App-Dateien: zuerst aus dem Cache, im Hintergrund aktualisieren.
+// OCR-Engine & Sprachdaten (groß, ändern sich nie): Cache zuerst.
+
+const VERSION = 'v1';
+const SHELL = `openbook-shell-${VERSION}`;
+const VENDOR = 'openbook-vendor-v1';
+
+const SHELL_FILES = [
+  './',
+  'index.html',
+  'manifest.webmanifest',
+  'css/app.css',
+  'js/app.js',
+  'js/db.js',
+  'js/ui.js',
+  'js/ocr.js',
+  'js/textproc.js',
+  'js/imageproc.js',
+  'js/scanner.js',
+  'js/reader.js',
+  'js/pageeditor.js',
+  'js/epub.js',
+  'js/backup.js',
+  'js/zip.js',
+  'icons/icon.svg',
+  'icons/icon-192.png',
+  'vendor/fonts/literata-latin-400-normal.woff2',
+];
+
+// Werden nach der Installation im Hintergrund geladen, damit OCR auch offline klappt
+const VENDOR_FILES = [
+  'vendor/tesseract/tesseract.min.js',
+  'vendor/tesseract/worker.min.js',
+  'vendor/tesseract/core/tesseract-core-simd-lstm.wasm.js',
+  'vendor/tesseract/lang/deu.traineddata.gz',
+  'vendor/tesseract/lang/eng.traineddata.gz',
+  'vendor/jszip/jszip.min.js',
+];
+
+self.addEventListener('install', (e) => {
+  e.waitUntil((async () => {
+    const c = await caches.open(SHELL);
+    await c.addAll(SHELL_FILES);
+    self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil((async () => {
+    for (const k of await caches.keys()) {
+      if (k.startsWith('openbook-') && k !== SHELL && k !== VENDOR) await caches.delete(k);
+    }
+    await self.clients.claim();
+    // Große Dateien vorab laden (nicht blockierend)
+    const v = await caches.open(VENDOR);
+    for (const f of VENDOR_FILES) {
+      if (!(await v.match(f))) v.add(f).catch(() => {});
+    }
+  })());
+});
+
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== location.origin) return;
+
+  if (url.pathname.includes('/vendor/')) {
+    e.respondWith((async () => {
+      const c = await caches.open(VENDOR);
+      const hit = await c.match(req, { ignoreSearch: true });
+      if (hit) return hit;
+      const res = await fetch(req);
+      if (res.ok) c.put(req, res.clone());
+      return res;
+    })());
+    return;
+  }
+
+  // Stale-while-revalidate für die App selbst
+  e.respondWith((async () => {
+    const c = await caches.open(SHELL);
+    const key = req.mode === 'navigate' ? './' : req;
+    const hit = await c.match(key, { ignoreSearch: req.mode === 'navigate' });
+    const net = fetch(req).then((res) => {
+      if (res.ok) c.put(key, res.clone());
+      return res;
+    }).catch(() => null);
+    if (hit) { e.waitUntil(net); return hit; }
+    const res = await net;
+    return res || new Response('Offline', { status: 503 });
+  })());
+});

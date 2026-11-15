@@ -1,1 +1,87 @@
-# openBook
+# openBook 📖
+
+**Deine eigenen Bücher abfotografieren und überall lesen, wie auf einem Kindle.**
+
+openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines Buchs, das dir gehört. Die App erkennt den Text direkt auf dem Gerät und macht daraus ein E-Book mit anpassbarer Schrift, Nachtmodus, Lesezeichen und Suche. Alles bleibt lokal auf deinem Gerät: keine Cloud, kein Konto, kein Upload.
+
+## Funktionen
+
+**Scannen**
+- Kamera-Scanner für viele Seiten am Stück: Antippen oder Auslöser drücken, nächste Seite, fertig
+- **Doppelseiten-Modus**: ein Foto vom aufgeschlagenen Buch wird automatisch in linke und rechte Seite geteilt
+- Scan-Filter (Graustufen, helles Papier), Taschenlampe, „Zurück“ für die letzte Aufnahme
+- Import vorhandener Fotos aus der Galerie
+
+**Texterkennung (OCR)**
+- Tesseract läuft komplett im Browser (Deutsch + Englisch), auch offline
+- Läuft im Hintergrund weiter, während du scannst; wird nach einem Neustart fortgesetzt
+- Repariert Silbentrennung am Zeilenende, entfernt Seitenzahlen und verbindet Absätze über Seitengrenzen
+
+**Lesen wie auf einem Kindle**
+- Echter Seitenumbruch statt Scrollen: rechts tippen = weiter, links = zurück, Mitte = Menü, Wischen geht auch
+- Schriftgröße, Schriftart (Literata, Georgia, Sans, Weit), Zeilenabstand, Ränder, Blocksatz mit Silbentrennung
+- Hintergründe: Weiß, Papier, Sepia, Dunkel, Schwarz
+- Fußzeile mit Buchseite und Prozent oder verbleibender Lesezeit (antippen zum Umschalten)
+- Lesezeichen, Volltextsuche, Seitenübersicht, Schieberegler
+- Originalfoto-Ansicht mit Zoom, z. B. für Bilder, Tabellen oder Formeln
+- Leseposition wird gespeichert, der Bildschirm bleibt beim Lesen an
+
+**Verwalten**
+- Bibliothek mit Covern (Foto oder automatisch erzeugt) und Lesefortschritt
+- Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen
+- **EPUB-Export**, z. B. für „Send to Kindle“, Apple Books oder Tolino
+- Sicherung und Wiederherstellung der ganzen Bibliothek als ZIP (mit Fotos)
+
+## Installieren
+
+openBook braucht **HTTPS** (für Kamera und Offline-Modus). Am einfachsten geht das mit GitHub Pages:
+
+1. Den Code auf den Branch `main` bringen.
+2. Im Repository **Settings → Pages → Build and deployment → Source: GitHub Actions** wählen.
+3. Der Workflow `.github/workflows/pages.yml` veröffentlicht die App unter `https://<benutzer>.github.io/<repo>/`.
+4. Die Adresse auf dem Handy öffnen und zum Startbildschirm hinzufügen:
+   - **iPhone (Safari):** Teilen → „Zum Home-Bildschirm“
+   - **Android (Chrome):** Menü ⋮ → „App installieren“
+
+Danach startet openBook wie eine normale App und funktioniert auch ohne Internet.
+
+### Lokal ausprobieren
+
+```bash
+python3 -m http.server 8000
+# → http://localhost:8000
+```
+
+Es gibt keinen Build-Schritt und keine Abhängigkeiten. Alles liegt im Repository, auch die OCR-Engine.
+
+## Tipps für gute Scans
+
+- Gleichmäßiges Licht ohne harte Schatten; bei wenig Licht die Taschenlampe nutzen
+- Handy möglichst parallel zur Seite halten, die Seite sollte den Rahmen gut ausfüllen
+- Bei dicken Büchern den Doppelseiten-Modus nutzen und das Buch leicht flach drücken
+- Erkennung dauert auf dem Handy etwa 3 bis 10 Sekunden pro Seite. Du kannst einfach weiterscannen
+
+## Daten & Speicher
+
+Bücher liegen in der IndexedDB des Browsers. Eine Seite braucht etwa 200 bis 400 KB, ein Buch mit 300 Seiten also ungefähr 60 bis 120 MB. openBook fragt nach dauerhaftem Speicher. Trotzdem gilt: **regelmäßig eine Sicherung erstellen** (Einstellungen → Alles sichern), besonders vor einem Handywechsel.
+
+> openBook ist für die private Nutzung **eigener** Bücher gedacht (Privatkopie). Bitte keine gescannten Bücher weitergeben.
+
+## Aufbau
+
+```
+index.html            App-Shell
+css/app.css           Design (Bibliothek, Scanner, Leser)
+js/app.js             Router, Bibliothek, Buchdetails, Einstellungen
+js/scanner.js         Kamera-Scanner
+js/reader.js          Kindle-artiger Leser (CSS-Spalten-Paginierung)
+js/pageeditor.js      Seiten bearbeiten
+js/ocr.js             OCR-Warteschlange (Tesseract.js, Web Worker)
+js/textproc.js        OCR → Absätze, Silbentrennung, Seitenübergänge
+js/imageproc.js       Skalieren, Scan-Filter, Teilen, Drehen, Zuschneiden
+js/db.js              IndexedDB
+js/epub.js            EPUB-3-Export
+js/backup.js          Sicherung/Wiederherstellung
+sw.js                 Service Worker (offline)
+vendor/               Tesseract, Sprachdaten, JSZip, Literata (siehe vendor/README.md)
+```
