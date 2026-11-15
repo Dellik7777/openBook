@@ -1,13 +1,16 @@
 // Synchronisierung über den Cloud-Speicher des Nutzers (Google Drive oder OneDrive).
 //
-// Abgeglichen werden NUR Texte, Titel/Autor/Cover, Profile und Lesestände.
-// Fotos der Seiten bleiben auf dem Gerät, mit dem gescannt wurde.
+// Abgeglichen werden Texte, Titel/Autor/Cover, Profile, Lesestände, Lesestatistik und Lernkarten.
+// Seitenfotos nur, wenn „Fotos mitsichern“ eingeschaltet ist (sonst bleiben sie auf dem Gerät).
 //
 // Dateien im App-Ordner:
 //   library.json         Profile, Bücher (Metadaten), Lesestände, Löschmarkierungen
 //   book-<id>.json        Seitentexte und Seitenreihenfolge eines Buchs
 //   cover-<coverId>.jpg   Cover
 //   fig-<id>.jpg          Abbildungen (Karten, Diagramme, Bilder)
+//   extras.json           Lesestatistik (je Gerät) und Lernkarten-Stand je Profil
+//   imgs-<bookId>.json    Seitenfotos in der Cloud: { pageId: Version }  (nur mit Foto-Sicherung)
+//   img-<pageId>.jpg      Seitenfoto
 //
 // Konfliktregel: Für jeden Datensatz gewinnt die jüngere Änderung (Zeitstempel).
 
@@ -16,6 +19,12 @@ import * as profiles from '../profiles.js';
 import { google } from './google.js';
 import { onedrive } from './onedrive.js';
 import { AuthError, ConflictError, takePending } from './oauth.js';
+import * as stats from '../stats.js';
+import { mergeCards } from '../cards.js';
+
+const PHOTOS_PER_RUN = 40; // Fotos je Durchgang (der Rest folgt im nächsten)
+export const photosEnabled = () => { try { return localStorage.getItem('ob.sync.photos') === '1'; } catch (e) { return false; } };
+export function setPhotos(on) { try { localStorage.setItem('ob.sync.photos', on ? '1' : '0'); } catch (e) { /* */ } if (on) syncNow(); }
 
 export const PROVIDERS = { google, onedrive };
 
@@ -166,6 +175,11 @@ async function runOnce() {
   const syncState = await db.getMeta('sync', {});
   const seen = syncState.seen || {};
   const figsInCloud = syncState.figs || {};
+  const imgs = syncState.imgs || {};          // pageId → Version, die in der Cloud liegt
+  const imgsV = syncState.imgsV || {};        // bookId → Stand der Foto-Liste
+  const seenImgs = syncState.seenImgs || {};
+  const photos = photosEnabled();
+  let photoBudget = PHOTOS_PER_RUN;
   const changedBooks = new Set();
   let changedOther = false;
 
@@ -252,7 +266,9 @@ async function runOnce() {
         await provider.write(`book-${book.id}.json`, JSON.stringify(await buildContent(book.id)), 'application/json');
       }
       seen[book.id] = Math.max(localV, remoteV);
+      if (photos && !book.enc) photoBudget = await syncPhotos(book, rb, { imgs, imgsV, seenImgs, budget: photoBudget });
     }
+    if (photos && photoBudget <= 0) pendingAgain = true; // noch Fotos übrig → gleich weitermachen
 
     // 6) Lesestände
     const localStates = new Map((await db.getAllStates()).map((s) => [s.key, s]));
@@ -274,6 +290,9 @@ async function runOnce() {
       }
     }
 
+    // 6b) Lesestatistik & Lernkarten
+    if (await syncExtras(await db.getTombstones())) changedOther = true;
+
     // 7) Cover hochladen, die die Cloud noch nicht kennt
     for (const book of await db.getBooks()) {
       if (book.cover && book.coverId && (lib.books[book.id] || {}).coverId !== book.coverId) {
@@ -282,16 +301,114 @@ async function runOnce() {
     }
 
     // 8) Neue library.json aus dem zusammengeführten Stand
-    const next = await buildLibrary();
+    const next = await buildLibrary(imgsV, lib);
     if (stableStringify(strip(next)) !== stableStringify(strip(lib))) {
       next.updatedAt = Date.now();
       await provider.write(LIB, JSON.stringify(next), 'application/json', { ifVersion: remote ? remote.version : null });
     }
-    await db.setMeta('sync', { seen, figs: figsInCloud, lastSync: Date.now() });
+    await db.setMeta('sync', { seen, figs: figsInCloud, imgs, imgsV, seenImgs, lastSync: Date.now() });
   } finally {
     applying = false;
   }
   if (changedBooks.size || changedOther) db.emit('sync', null);
+}
+
+// ---------- Seitenfotos (optional) ----------
+
+async function syncPhotos(book, rb, { imgs, imgsV, seenImgs, budget }) {
+  const name = `imgs-${book.id}.json`;
+  const remoteV = (rb && rb.imgsV) || 0;
+  let list = null; // Inhalt von imgs-<id>.json
+  const loadList = async () => {
+    if (list) return list;
+    const f = await provider.read(name).catch(() => null);
+    try { list = f ? JSON.parse(f.data) : {}; } catch (e) { list = {}; }
+    return list;
+  };
+  const pages = await db.getPagesOfBook(book.id);
+  const tomb = (await db.getTombstones()).pages;
+  let changed = false;
+
+  // Herunterladen: Seiten ohne Foto (oder mit älterem), die in der Cloud ein Foto haben
+  if (remoteV > (seenImgs[book.id] || 0)) {
+    const l = await loadList();
+    let complete = true;
+    for (const p of pages) {
+      const ver = l[p.id];
+      if (!ver || imgs[p.id] === ver || p.photoDeleted) continue;
+      if (p.image && (p.imageAt || p.createdAt || 0) >= ver) { imgs[p.id] = ver; continue; }
+      if (budget <= 0) { complete = false; break; }
+      const f = await provider.read(`img-${p.id}.jpg`, 'blob').catch(() => null);
+      budget--;
+      if (!f) continue;
+      const image = new Blob([f.data], { type: 'image/jpeg' });
+      const { makeThumb, loadBitmap } = await import('../imageproc.js');
+      let thumb = p.thumb;
+      if (!thumb) { try { thumb = await makeThumb(await loadBitmap(image)); } catch (e) { /* ohne Vorschau */ } }
+      const cur = await db.getPage(p.id);
+      if (cur) await db.putPage({ ...cur, image, thumb, imageAt: ver }, { silent: true });
+      imgs[p.id] = ver;
+    }
+    if (complete) seenImgs[book.id] = remoteV;
+  }
+
+  // Hochladen: Fotos dieses Geräts, die noch nicht (in dieser Version) in der Cloud liegen
+  for (const p of pages) {
+    if (!p.image) continue;
+    const ver = p.imageAt || p.createdAt || 1;
+    if (imgs[p.id] === ver) continue;
+    if (budget <= 0) break;
+    await provider.write(`img-${p.id}.jpg`, p.image, 'image/jpeg');
+    budget--;
+    imgs[p.id] = ver;
+    (await loadList())[p.id] = ver;
+    changed = true;
+  }
+  // Gelöschte Seiten: Foto in der Cloud entfernen
+  const l0 = list || (Object.keys(imgs).some((id) => tomb[id] && tomb[id].bookId === book.id) ? await loadList() : null);
+  if (l0) {
+    for (const id of Object.keys(l0)) {
+      if (!tomb[id]) continue;
+      await provider.remove(`img-${id}.jpg`).catch(() => {});
+      delete l0[id]; delete imgs[id];
+      changed = true;
+    }
+  }
+  if (changed) {
+    await provider.write(name, JSON.stringify(list), 'application/json');
+    imgsV[book.id] = Date.now();
+    seenImgs[book.id] = imgsV[book.id];
+  }
+  return budget;
+}
+
+// ---------- Lesestatistik & Lernkarten ----------
+
+const EXTRAS = 'extras.json';
+async function syncExtras(tomb) {
+  const remote = await provider.read(EXTRAS).catch(() => null);
+  let ex = { format: 'lesepixel-extras', version: 1, profiles: {} };
+  if (remote) { try { ex = { ...ex, ...JSON.parse(remote.data) }; } catch (e) { /* neu aufbauen */ } }
+  const dev = stats.deviceId();
+  const next = { format: 'lesepixel-extras', version: 1, profiles: {} };
+  const cutoff = stats.dayKey(new Date(Date.now() - 730 * 86400000));
+  let changedLocal = false;
+  for (const p of await db.getProfiles()) {
+    const rp = (ex.profiles || {})[p.id] || {};
+    const devices = { ...(rp.stats || {}) };
+    delete devices[dev];
+    const curRemote = (await db.getMeta('statsRemote|' + p.id)) || {};
+    if (stableStringify(curRemote) !== stableStringify(devices)) { await db.setMeta('statsRemote|' + p.id, devices); changedLocal = true; }
+    const own = await stats.ownStats(p.id);
+    for (const k of Object.keys(own)) if (k < cutoff) delete own[k];
+    const local = (await db.getMeta('cards|' + p.id)) || { cards: {} };
+    const merged = mergeCards(local.cards, rp.cards);
+    if (stableStringify(merged) !== stableStringify(local.cards || {})) { await db.setMeta('cards|' + p.id, { cards: merged }); changedLocal = true; }
+    next.profiles[p.id] = { stats: { ...devices, ...(Object.keys(own).length ? { [dev]: { days: own } } : {}) }, cards: merged };
+  }
+  for (const [pid, rp] of Object.entries(ex.profiles || {})) if (!next.profiles[pid] && !(tomb.profiles || {})[pid]) next.profiles[pid] = rp;
+  if (stableStringify(next.profiles) !== stableStringify(ex.profiles || {})) await provider.write(EXTRAS, JSON.stringify(next), 'application/json');
+  return changedLocal;
 }
 
 async function adoptRemoteProfiles(remoteProfiles, tomb) {
@@ -340,7 +457,7 @@ async function downloadCover(coverId) {
   }
 }
 
-async function buildLibrary() {
+async function buildLibrary(imgsV = {}, prev = null) {
   const lib = emptyLib();
   for (const p of await db.getProfiles()) lib.profiles[p.id] = p;
   for (const f of await db.getFolders()) lib.folders[f.id] = f;
@@ -349,6 +466,7 @@ async function buildLibrary() {
       id: b.id, title: b.title, author: b.author || '', coverId: b.cover ? b.coverId : null, ignoredGaps: b.ignoredGaps || [],
       folderId: b.folderId || null, tags: b.tags || [], locked: !!b.locked, isbn: b.isbn || null, source: b.source || null,
       createdAt: b.createdAt, metaAt: b.metaAt || 0, contentV: await contentVersion(b.id),
+      imgsV: Math.max(imgsV[b.id] || 0, (prev && prev.books && prev.books[b.id] && prev.books[b.id].imgsV) || 0) || undefined,
     };
   }
   for (const s of await db.getAllStates()) {

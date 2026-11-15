@@ -987,7 +987,7 @@ async function openSettings() {
         } }, icon('upload'), 'Sicherung laden'),
       ),
     ),
-    h('p', { class: 'muted small' }, 'Die Texterkennung läuft lokal, Fotos werden nie hochgeladen. Ohne Synchronisierung bleibt alles nur auf diesem Gerät.'),
+    h('p', { class: 'muted small' }, 'Die Texterkennung läuft lokal. Fotos werden nur hochgeladen, wenn du „Fotos mitsichern“ einschaltest. Ohne Synchronisierung bleibt alles nur auf diesem Gerät.'),
     h('a', { class: 'btn small', href: '#/rechtliches', onClick: () => s.close() }, 'Rechtliches: Nutzung, Datenschutz, Lizenzen'),
   ), { onClose: () => syncEl._off() });
 }
@@ -1081,7 +1081,7 @@ function syncCard() {
     card.replaceChildren(h('strong', {}, 'Synchronisierung'));
     if (!prov) {
       card.append(
-        h('p', { class: 'muted small' }, 'Texte, Lesepositionen, Lesezeichen und Profile auf all deinen Geräten abgleichen – über deinen eigenen Cloud-Speicher. Fotos bleiben auf dem Gerät.'),
+        h('p', { class: 'muted small' }, 'Texte, Lesepositionen, Lesezeichen, Markierungen, Lernkarten, Lesestatistik und Profile auf all deinen Geräten abgleichen – über deinen eigenen Cloud-Speicher. Fotos nur, wenn du es einschaltest.'),
         h('div', { class: 'row gap-s wrap' },
           ...Object.values(sync.PROVIDERS).map((p) => h('button', {
             class: 'btn small',
@@ -1101,9 +1101,16 @@ function syncCard() {
         auth: 'Anmeldung abgelaufen – bitte neu anmelden.',
         offline: 'Offline – wird nachgeholt, sobald Internet da ist.',
       };
+      const photoBox = h('input', { type: 'checkbox', checked: sync.photosEnabled(), onChange: async (e) => {
+        if (e.target.checked && !(await confirmDialog('Fotos mitsichern?', 'Alle Seitenfotos werden zusätzlich in deinen Cloud-Speicher geladen (ca. 0,3 MB pro Seite). Auf anderen Geräten mit derselben Einstellung erscheinen sie dann auch. Gesperrte Bücher sind ausgenommen.', 'Einschalten'))) { e.target.checked = false; return; }
+        sync.setPhotos(e.target.checked);
+        toast(e.target.checked ? 'Fotos werden nach und nach hochgeladen' : 'Fotos werden nicht mehr gesichert');
+      } });
       card.append(
         h('p', { class: 'small' }, `${prov.label}${prov.account() ? ' · ' + prov.account() : ''}`),
         h('p', { class: 'muted small' }, lines[st.state] || ''),
+        h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Fotos mitsichern'), h('br'),
+          h('span', { class: 'muted small' }, 'Seitenfotos als Sicherung in der Cloud – und auf anderen Geräten verfügbar.')), photoBox),
         h('div', { class: 'row gap-s wrap' },
           st.state === 'auth'
             ? h('button', { class: 'btn small primary', onClick: () => prov.connect({ silent: false }) }, 'Neu anmelden')

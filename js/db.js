@@ -313,6 +313,7 @@ export async function updatePage(id, patch) {
     const page = await promisify(store.get(id));
     if (!page) return;
     if (SYNCED_PAGE_FIELDS.some((k) => k in patch && JSON.stringify(patch[k]) !== JSON.stringify(page[k]))) page.updatedAt = Date.now();
+    if ('image' in patch && patch.image !== page.image) page.imageAt = Date.now(); // für die Foto-Sicherung
     Object.assign(page, patch);
     store.put(page);
     updated = page;

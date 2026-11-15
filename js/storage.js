@@ -37,7 +37,7 @@ export async function shrinkPhotos(bookId, onProgress) {
     const img = await toBlob(c, 'image/jpeg', 0.6);
     if (img.size < p.image.size) {
       saved += p.image.size - img.size;
-      await db.putPage({ ...p, image: img, thumb: p.thumb || await makeThumb(c) }, { silent: true });
+      await db.putPage({ ...p, image: img, imageAt: Date.now(), thumb: p.thumb || await makeThumb(c) }, { silent: true });
     }
     onProgress && onProgress((i + 1) / pages.length);
   }
@@ -52,7 +52,7 @@ export async function deletePhotos(bookId) {
     if (!p.image) continue;
     if (p.ocrStatus !== 'done') continue; // ohne erkannten Text wäre die Seite verloren
     saved += p.image.size;
-    await db.putPage({ ...p, image: null }, { silent: true });
+    await db.putPage({ ...p, image: null, photoDeleted: true }, { silent: true }); // nicht wieder aus der Cloud laden
   }
   db.emit('pages', bookId);
   return saved;

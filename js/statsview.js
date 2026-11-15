@@ -113,7 +113,7 @@ export async function openStats(root) {
       iconButton('back', 'Zurück', () => { history.length > 1 ? history.back() : (location.hash = '#/'); }),
       h('h1', { class: 'grow tr-title' }, 'Lesestatistik'),
     ),
-    h('p', { class: 'muted small' }, `Profil „${profile.name}“ · gezählt wird die Zeit, in der du liest oder vorlesen lässt (nur auf diesem Gerät).`),
+    h('p', { class: 'muted small' }, `Profil „${profile.name}“ · gezählt wird die Zeit, in der du liest oder vorlesen lässt` + (st.devices > 1 ? ` – auf ${st.devices} Geräten zusammen.` : ' (mit Synchronisierung über alle Geräte).')),
     tiles,
     goalCard,
     h('section', { class: 'card stat-card' },
