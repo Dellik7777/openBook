@@ -1,6 +1,6 @@
 {
-  "name": "openBook",
-  "short_name": "openBook",
+  "name": "Lesepixel",
+  "short_name": "Lesepixel",
   "description": "Gedrucktes abfotografieren und wie ein E-Book lesen. Alles bleibt auf dem Gerät.",
   "lang": "de",
   "start_url": "./",

@@ -1,8 +1,8 @@
-// Service Worker: macht openBook offline nutzbar.
+// Service Worker: macht Lesepixel offline nutzbar.
 // App-Dateien: zuerst aus dem Cache, im Hintergrund aktualisieren.
 // OCR-Engine & Sprachdaten (groß, ändern sich nie): Cache zuerst.
 
-const VERSION = 'v6';
+const VERSION = 'v7';
 const SHELL = `openbook-shell-${VERSION}`;
 const VENDOR = 'openbook-vendor-v1';
 

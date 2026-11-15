@@ -48,7 +48,7 @@ export async function importBackupDetailed(file) {
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
   const metaFile = zip.file('openbook.json');
-  if (!metaFile) throw new Error('Keine openBook-Sicherung');
+  if (!metaFile) throw new Error('Keine Lesepixel-Sicherung');
   const meta = JSON.parse(await metaFile.async('string'));
   if (meta.format !== FORMAT) throw new Error('Unbekanntes Format');
   const existing = new Set((await db.getBooks()).map((b) => b.id));
