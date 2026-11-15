@@ -38,6 +38,11 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines B
 - **Sync über Google Drive oder OneDrive**: Texte, Profile, Lesepositionen, Lesezeichen und Cover auf allen Geräten, ohne eigenen Server (Fotos bleiben lokal). Einrichtung: siehe **[SYNC.md](SYNC.md)**
 - Auf einem anderen Gerät weitergelesen? openBook springt an die neueste Stelle
 
+**Buch an eigenes Gerät senden (ohne Internet)**
+- Direktübertragung per **WLAN oder Hotspot**: Verbindungsaufbau über zwei QR-Codes, danach gehen die Daten direkt von Gerät zu Gerät, ohne Internet, Server oder Cloud
+- Funktioniert auch zwischen iPhone, iPad und Android; Fotos optional
+- Kein gemeinsames WLAN? openBook zeigt einen **WLAN-QR-Code** für den Hotspot, den das andere Gerät mit der normalen Kamera-App scannt
+
 **Verwalten**
 - Bibliothek mit Covern (Foto oder automatisch erzeugt) und Lesefortschritt
 - Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen, Seitenzahl korrigieren, **Abbildungen markieren** (Beschriftungen in der Abbildung landen dann nicht im Lesetext)
@@ -103,5 +108,7 @@ js/db.js              IndexedDB
 js/epub.js            EPUB-3-Export
 js/backup.js          Sicherung/Wiederherstellung
 sw.js                 Service Worker (offline)
-vendor/               Tesseract, Sprachdaten, JSZip, Literata (siehe vendor/README.md)
+js/transfer.js        Direktübertragung (WebRTC-Datenkanal, Signalisierung per QR-Code)
+js/transferview.js    Bildschirme „Senden“ und „Empfangen“
+vendor/               Tesseract, Sprachdaten, JSZip, QR-Codes, Literata (siehe vendor/README.md)
 ```

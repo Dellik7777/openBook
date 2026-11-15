@@ -5,6 +5,7 @@ import { processCapture, processCover } from './imageproc.js';
 import { openScanner } from './scanner.js';
 import { openReader } from './reader.js';
 import { openPageEditor } from './pageeditor.js';
+import { openSend, openReceive } from './transferview.js';
 import * as profiles from './profiles.js';
 import * as sync from './sync/sync.js';
 import { clientId, redirectUri } from './sync/oauth.js';
@@ -21,6 +22,8 @@ const routes = [
   [/^#\/scan\/([\w]+)$/, (m) => openScanner(app, m[1])],
   [/^#\/scan\/([\w]+)\/nach\/([\w]+)(?:\/(\d+))?$/, (m) => openScanner(app, m[1], m[2], +(m[3] || 1))],
   [/^#\/read\/([\w]+)$/, (m) => openReader(app, m[1])],
+  [/^#\/send\/([\w]+)$/, (m) => openSend(app, m[1])],
+  [/^#\/receive$/, () => openReceive(app)],
   [/^#\/page\/([\w]+)\/([\w]+)$/, (m) => openPageEditor(app, m[1], m[2])],
 ];
 
@@ -374,6 +377,7 @@ async function renderBook(bookId) {
         const blob = await exportEpub(bookId);
         download(blob, safeName(book.title) + '.epub');
       } }, icon('download'), 'Als EPUB exportieren (z. B. für Kindle)'),
+      h('button', { class: 'menu-item', onClick: () => { s.close(); go(`#/send/${bookId}`); } }, icon('wifi'), 'An eigenes Gerät senden (WLAN, ohne Internet)'),
       h('button', { class: 'menu-item', onClick: async () => {
         s.close();
         const { exportBackup } = await import('./backup.js');
@@ -469,6 +473,11 @@ async function openSettings() {
         const ok = await db.requestPersistence();
         toast(ok ? 'Dauerhafter Speicher aktiviert' : 'Der Browser hat das abgelehnt. Installiere openBook auf dem Startbildschirm.');
       } }, 'Dauerhaften Speicher anfordern') : null,
+    ),
+    h('div', { class: 'card' },
+      h('strong', {}, 'Buch empfangen'),
+      h('p', { class: 'muted small' }, 'Ein Buch direkt von einem anderen eigenen Gerät übernehmen – per WLAN oder Hotspot, ohne Internet.'),
+      h('button', { class: 'btn small', onClick: () => { s.close(); go('#/receive'); } }, icon('wifi'), 'Buch empfangen'),
     ),
     h('div', { class: 'card' },
       h('strong', {}, 'Sicherung'),

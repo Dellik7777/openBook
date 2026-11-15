@@ -6,7 +6,8 @@ import * as profiles from './profiles.js';
 
 const FORMAT = 'openbook-backup';
 
-export async function exportBackup(bookIds = null) {
+// photos=false: nur Text, Cover und Abbildungen (viel kleiner, z. B. für die Übertragung)
+export async function exportBackup(bookIds = null, { photos = true } = {}) {
   const JSZip = await loadJSZip();
   const zip = new JSZip();
   const books = (await db.getBooks()).filter((b) => !bookIds || bookIds.includes(b.id));
@@ -21,8 +22,8 @@ export async function exportBackup(bookIds = null) {
       hasCover: !!cover,
       states: allStates.filter((s) => s.bookId === b.id),
       pages: pages.map((p) => {
-        if (p.image) zip.file(`books/${b.id}/pages/${p.id}.jpg`, p.image);
-        if (p.thumb) zip.file(`books/${b.id}/thumbs/${p.id}.jpg`, p.thumb);
+        if (photos && p.image) zip.file(`books/${b.id}/pages/${p.id}.jpg`, p.image);
+        if (photos && p.thumb) zip.file(`books/${b.id}/thumbs/${p.id}.jpg`, p.thumb);
         return { id: p.id, text: p.text, ocrStatus: p.ocrStatus === 'done' ? 'done' : 'pending', confidence: p.confidence, createdAt: p.createdAt, hasImage: !!p.image, printedNo: p.printedNo ?? null, printedNoManual: !!p.printedNoManual, paraY: p.paraY || null };
       }),
       figures: (await db.getFiguresOfBook(b.id)).map((f) => {
@@ -38,7 +39,12 @@ export async function exportBackup(bookIds = null) {
   return zip.generateAsync({ type: 'blob', compression: 'STORE' });
 }
 
+// → Anzahl der Bücher; importBackupDetailed liefert zusätzlich die IDs
 export async function importBackup(file) {
+  return (await importBackupDetailed(file)).count;
+}
+
+export async function importBackupDetailed(file) {
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
   const metaFile = zip.file('openbook.json');
@@ -47,6 +53,7 @@ export async function importBackup(file) {
   if (meta.format !== FORMAT) throw new Error('Unbekanntes Format');
   const existing = new Set((await db.getBooks()).map((b) => b.id));
   let n = 0;
+  const bookIds = [];
   for (const mb of meta.books) {
     // Bereits vorhandene Bücher werden als Kopie importiert
     const id = existing.has(mb.id) ? db.uid() : mb.id;
@@ -103,8 +110,9 @@ export async function importBackup(file) {
       await db.updateState(profileId, id, { position: mb.position || null, bookmarks: mb.bookmarks || [] });
     }
     n++;
+    bookIds.push(id);
   }
-  return n;
+  return { count: n, bookIds };
 }
 
 async function blobOf(zip, path) {

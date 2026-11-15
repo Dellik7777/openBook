@@ -2,7 +2,7 @@
 // App-Dateien: zuerst aus dem Cache, im Hintergrund aktualisieren.
 // OCR-Engine & Sprachdaten (groß, ändern sich nie): Cache zuerst.
 
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL = `openbook-shell-${VERSION}`;
 const VENDOR = 'openbook-vendor-v1';
 
@@ -27,6 +27,8 @@ const SHELL_FILES = [
   'js/pagecheck.js',
   'js/rich.js',
   'js/fontstyle.js',
+  'js/transfer.js',
+  'js/transferview.js',
   'js/config.js',
   'js/sync/sync.js',
   'js/sync/oauth.js',
@@ -45,6 +47,8 @@ const VENDOR_FILES = [
   'vendor/tesseract/lang/deu.traineddata.gz',
   'vendor/tesseract/lang/eng.traineddata.gz',
   'vendor/jszip/jszip.min.js',
+  'vendor/qr/qrcode.js',
+  'vendor/qr/jsQR.js',
 ];
 
 self.addEventListener('install', (e) => {
