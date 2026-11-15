@@ -1,15 +1,17 @@
 import * as db from './db.js';
 import * as ocr from './ocr.js';
-import { h, icon, iconButton, toast, sheet, confirmDialog, pickFiles, UrlPool, coverColor, download, safeName } from './ui.js';
+import { h, icon, iconButton, pixels, toast, sheet, confirmDialog, pickFiles, UrlPool, coverColor, download, safeName } from './ui.js';
 import { processCapture, processCover } from './imageproc.js';
 import { openScanner } from './scanner.js';
 import { openReader } from './reader.js';
 import { openPageEditor } from './pageeditor.js';
 import { openSend, openReceive } from './transferview.js';
+import { openLegal } from './legalview.js';
 import * as profiles from './profiles.js';
 import * as sync from './sync/sync.js';
 import { clientId, redirectUri } from './sync/oauth.js';
 import { checkPages, describe } from './pagecheck.js';
+import { stripMd } from './rich.js';
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -24,11 +26,14 @@ const routes = [
   [/^#\/read\/([\w]+)$/, (m) => openReader(app, m[1])],
   [/^#\/send\/([\w]+)$/, (m) => openSend(app, m[1])],
   [/^#\/receive$/, () => openReceive(app)],
+  [/^#\/rechtliches$/, () => openLegal(app)],
   [/^#\/page\/([\w]+)\/([\w]+)$/, (m) => openPageEditor(app, m[1], m[2])],
 ];
 
 async function route() {
   if (cleanup) { try { cleanup(); } catch (e) { console.error(e); } cleanup = null; }
+  // offene Dialoge/Sheets der vorherigen Ansicht schließen
+  document.querySelectorAll('.backdrop, .figviewer').forEach((el) => el.remove());
   app.replaceChildren();
   document.body.className = '';
   const hash = location.hash || '#/';
@@ -87,14 +92,14 @@ async function renderLibrary() {
     const p = profiles.current();
     avatarBtn.replaceChildren(avatar(p));
     avatarBtn.title = 'Profil: ' + (p ? p.name : '');
-    libTitle.textContent = p && multiProfile ? `Bibliothek · ${p.name.split(/\s+/)[0]}` : 'Bibliothek';
+    libTitle.replaceChildren(pixels('small'), p && multiProfile ? `Bibliothek · ${p.name.split(/\s+/)[0]}` : 'Bibliothek');
   }
   let multiProfile = (await db.getProfiles()).length > 1;
   showProfile();
 
   const view = h('div', { class: 'page library' },
     h('header', { class: 'topbar' },
-      h('h1', { class: 'brand' }, icon('book'), 'openBook'),
+      h('h1', { class: 'brand' }, pixels(), 'openBook'),
       h('div', { class: 'row gap-s' },
         syncIndicator,
         iconButton('settings', 'Einstellungen & Sicherung', () => openSettings()),
@@ -102,6 +107,7 @@ async function renderLibrary() {
         h('button', { class: 'btn primary btn-add', 'aria-label': 'Neues Buch', onClick: () => newBookDialog() }, icon('plus'), h('span', { class: 'label' }, 'Buch')),
       ),
     ),
+    usageCard(),
     h('div', { class: 'toolbar' }, libTitle, sortSel),
     badge,
     grid,
@@ -267,7 +273,7 @@ async function renderBook(bookId) {
     ),
     head,
     badge,
-    h('div', { class: 'toolbar' }, h('h2', {}, 'Seiten'),
+    h('div', { class: 'toolbar' }, h('h2', {}, pixels('small'), 'Seiten'),
       h('div', { class: 'row gap-s' },
         h('button', { class: 'btn small', onClick: () => importImages() }, icon('images'), 'Fotos importieren'),
       ),
@@ -310,7 +316,7 @@ async function renderBook(bookId) {
         h('h1', {}, book.title),
         book.author ? h('p', { class: 'author' }, book.author) : null,
         h('p', { class: 'muted small' },
-          `${pages.length} Seiten · ${done} erkannt` + (errs ? ` · ${errs} Fehler` : '') + (words ? ` · ca. ${Math.max(1, Math.round(words / 250))} Min. Lesezeit` : ''),
+          `${pages.length} ${pages.length === 1 ? 'Seite' : 'Seiten'} · ${done} erkannt` + (errs ? ` · ${errs} Fehler` : '') + (words ? ` · ca. ${Math.max(1, Math.round(words / 250))} Min. Lesezeit` : ''),
         ),
         h('div', { class: 'row gap-s wrap' },
           pages.length ? h('button', { class: 'btn primary', onClick: () => go(`#/read/${bookId}`) }, icon('book'), state && state.position ? 'Weiterlesen' : 'Lesen') : null,
@@ -360,7 +366,7 @@ async function renderBook(bookId) {
     return h('button', { class: 'page-tile', onClick: () => go(`#/page/${bookId}/${p.id}`), 'aria-label': `Seite ${i + 1} bearbeiten` },
       p.thumb
         ? h('img', { src: pool.get(p.thumb), alt: '', loading: 'lazy' })
-        : h('span', { class: 'page-textthumb' }, (p.text || '').slice(0, 220)),
+        : h('span', { class: 'page-textthumb' }, stripMd(p.text || '').slice(0, 220)),
       h('span', { class: 'page-no' }, p.printedNo ? `S. ${p.printedNo}` : i + 1),
       label ? h('span', { class: 'page-status ' + p.ocrStatus }, label) : null,
       figPages.has(p.id) ? h('span', { class: 'page-fig', title: 'Enthält Abbildung' }, icon('figure')) : null,
@@ -505,7 +511,8 @@ async function openSettings() {
         } }, icon('upload'), 'Sicherung laden'),
       ),
     ),
-    h('p', { class: 'muted small' }, 'Die Texterkennung läuft lokal, Fotos werden nie hochgeladen. Ohne Synchronisierung bleibt alles nur auf diesem Gerät. Nur für Bücher, die dir selbst gehören.'),
+    h('p', { class: 'muted small' }, 'Die Texterkennung läuft lokal, Fotos werden nie hochgeladen. Ohne Synchronisierung bleibt alles nur auf diesem Gerät.'),
+    h('a', { class: 'btn small', href: '#/rechtliches', onClick: () => s.close() }, 'Rechtliches: Nutzung, Datenschutz, Lizenzen'),
   ), { onClose: () => syncEl._off() });
 }
 
@@ -642,5 +649,22 @@ function syncCard() {
       }),
     ));
   }
+  return card;
+}
+
+// ---------- Einmaliger Hinweis zur Nutzung (Urheberrecht) ----------
+
+function usageCard() {
+  let ok = false;
+  try { ok = localStorage.getItem('ob.legalOk') === '1'; } catch (e) { /* */ }
+  if (ok) return null;
+  const card = h('div', { class: 'card notice' },
+    h('strong', {}, 'Bitte beachten'),
+    h('p', { class: 'small' }, 'openBook ist für eigene Dokumente und Notizen, gemeinfreie oder vergriffene Bücher und einzelne Auszüge gedacht. Ein aktuelles Buch vollständig zu digitalisieren, ist in Deutschland auch privat grundsätzlich nicht erlaubt – selbst wenn es dir gehört.'),
+    h('div', { class: 'row gap-s wrap' },
+      h('button', { class: 'btn small primary', onClick: () => { try { localStorage.setItem('ob.legalOk', '1'); } catch (e) { /* */ } card.remove(); } }, 'Verstanden'),
+      h('a', { class: 'btn small', href: '#/rechtliches' }, 'Mehr erfahren'),
+    ),
+  );
   return card;
 }

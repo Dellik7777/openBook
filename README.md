@@ -1,8 +1,8 @@
 # openBook 📖
 
-**Deine eigenen Bücher abfotografieren und überall lesen, wie auf einem Kindle.**
+**Gedrucktes abfotografieren und überall lesen – wie ein E-Book.**
 
-openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines Buchs, das dir gehört. Die App erkennt den Text direkt auf dem Gerät und macht daraus ein E-Book mit anpassbarer Schrift, Nachtmodus, Lesezeichen und Suche. Fotos und Texterkennung bleiben auf deinem Gerät. Optional werden Texte und Lesestände über **deinen eigenen** Google Drive oder OneDrive zwischen iPhone, iPad und Android abgeglichen.
+openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigener Dokumente, Notizen, Unterlagen oder Bücher (siehe [Rechtliches](#rechtliches)). Die App erkennt den Text direkt auf dem Gerät und macht daraus ein E-Book mit anpassbarer Schrift, Nachtmodus, Lesezeichen und Suche. Fotos und Texterkennung bleiben auf deinem Gerät. Optional werden Texte und Lesestände über **deinen eigenen** Google Drive oder OneDrive zwischen iPhone, iPad und Android abgeglichen.
 
 ## Funktionen
 
@@ -21,7 +21,7 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eines B
 - **Erhält die Formatierung:** Überschriften, Aufzählungen mit Ebenen, nummerierte Listen, **fett** und *kursiv* (eigene Bildanalyse von Strichstärke und Schräglage)
 - **Schatten-Entfernung:** Schatten von Hand oder Handy, Falten und ungleichmäßiges Licht werden vor der Erkennung herausgerechnet
 
-**Lesen wie auf einem Kindle**
+**Lesen wie auf einem E-Book-Reader**
 - Echter Seitenumbruch statt Scrollen: rechts tippen = weiter, links = zurück, Mitte = Menü, Wischen geht auch
 - Schriftgröße, Schriftart (Literata, Georgia, Sans, Weit), Zeilenabstand, Ränder, Blocksatz mit Silbentrennung
 - Absätze mit Einzug (Roman) oder Abstand (Fachtext), automatisch passend zum Inhalt
@@ -82,7 +82,15 @@ Es gibt keinen Build-Schritt und keine Abhängigkeiten. Alles liegt im Repositor
 
 Bücher liegen in der IndexedDB des Browsers. Mit Synchronisierung liegt zusätzlich der Text (ca. 0,5 MB pro Buch) in deinem Cloud-Speicher. Eine Seite braucht etwa 200 bis 400 KB, ein Buch mit 300 Seiten also ungefähr 60 bis 120 MB. openBook fragt nach dauerhaftem Speicher. Trotzdem gilt: **regelmäßig eine Sicherung erstellen** (Einstellungen → Alles sichern), besonders vor einem Handywechsel.
 
-> openBook ist für die private Nutzung **eigener** Bücher gedacht (Privatkopie). Bitte keine gescannten Bücher weitergeben.
+## Rechtliches
+
+openBook ist ein Werkzeug; wofür es eingesetzt wird, liegt in der Verantwortung der Nutzer.
+
+- **Unbedenklich:** eigene Dokumente und Notizen, gemeinfreie Werke (Urheber seit über 70 Jahren tot), Werke mit Erlaubnis des Rechteinhabers, einzelne Auszüge für den privaten Gebrauch.
+- **Nicht erlaubt:** ein urheberrechtlich geschütztes Buch im Wesentlichen vollständig zu kopieren – auch privat und auch bei eigenen Büchern –, es sei denn, es wird von Hand abgeschrieben, der Rechteinhaber stimmt zu oder das Buch ist seit mindestens zwei Jahren vergriffen (§ 53 Abs. 4 b UrhG).
+- Gescannte Inhalte nicht weitergeben oder veröffentlichen.
+
+In der App: **Einstellungen → Rechtliches** (Nutzungshinweis, Datenschutz-Entwurf, Impressum, Lizenzen). Angaben zum Anbieter werden in `js/legal.js` eingetragen. Keine Rechtsberatung – vor einem öffentlichen oder kommerziellen Angebot rechtlich prüfen lassen.
 
 ## Aufbau
 
@@ -96,7 +104,7 @@ js/sync/sync.js       Abgleich (Zusammenführen, Löschmarkierungen, Zeitplan)
 js/sync/google.js     Google Drive (appDataFolder, OAuth-Weiterleitung)
 js/sync/onedrive.js   OneDrive (App-Ordner, OAuth mit PKCE)
 js/scanner.js         Kamera-Scanner
-js/reader.js          Kindle-artiger Leser (CSS-Spalten-Paginierung)
+js/reader.js          E-Book-Leser (CSS-Spalten-Paginierung)
 js/pageeditor.js      Seiten bearbeiten
 js/ocr.js             OCR-Warteschlange (Tesseract.js, Web Worker)
 js/textproc.js        OCR → Absätze, Seitenzahlen, Kolumnentitel, Abbildungen im Lesefluss
@@ -110,5 +118,7 @@ js/backup.js          Sicherung/Wiederherstellung
 sw.js                 Service Worker (offline)
 js/transfer.js        Direktübertragung (WebRTC-Datenkanal, Signalisierung per QR-Code)
 js/transferview.js    Bildschirme „Senden“ und „Empfangen“
-vendor/               Tesseract, Sprachdaten, JSZip, QR-Codes, Literata (siehe vendor/README.md)
+js/legal.js           Angaben zum Anbieter (Impressum/Datenschutz)
+js/legalview.js       Seite „Rechtliches“
+vendor/               Tesseract, Sprachdaten, JSZip, QR-Codes, Literata, Montserrat (siehe vendor/README.md)
 ```

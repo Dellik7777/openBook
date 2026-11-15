@@ -19,7 +19,8 @@ const DB_NAME = 'openbook';
 const DB_VERSION = 3;
 let dbPromise = null;
 
-export const PROFILE_COLORS = ['#b4531b', '#2d6a4f', '#1d4e89', '#7b2d8b', '#b8336a', '#5c4d3c', '#0f766e', '#9a3412'];
+// Profilfarben (weiße Schrift darauf gut lesbar); zuerst die Markenfarben Navy und Orange-dunkel
+export const PROFILE_COLORS = ['#293244', '#A85508', '#5E687C', '#1D4E89', '#2D6A4F', '#7B2D8B', '#B8336A', '#0F766E'];
 
 export function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);

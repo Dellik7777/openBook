@@ -2,7 +2,7 @@
 // App-Dateien: zuerst aus dem Cache, im Hintergrund aktualisieren.
 // OCR-Engine & Sprachdaten (groß, ändern sich nie): Cache zuerst.
 
-const VERSION = 'v5';
+const VERSION = 'v6';
 const SHELL = `openbook-shell-${VERSION}`;
 const VENDOR = 'openbook-vendor-v1';
 
@@ -29,6 +29,8 @@ const SHELL_FILES = [
   'js/fontstyle.js',
   'js/transfer.js',
   'js/transferview.js',
+  'js/legal.js',
+  'js/legalview.js',
   'js/config.js',
   'js/sync/sync.js',
   'js/sync/oauth.js',
@@ -37,6 +39,10 @@ const SHELL_FILES = [
   'icons/icon.svg',
   'icons/icon-192.png',
   'vendor/fonts/literata-latin-400-normal.woff2',
+  'vendor/fonts/montserrat-regular.woff2',
+  'vendor/fonts/montserrat-semibold.woff2',
+  'vendor/fonts/montserrat-bold.woff2',
+  'icons/icon-512.png',
 ];
 
 // Werden nach der Installation im Hintergrund geladen, damit OCR auch offline klappt
