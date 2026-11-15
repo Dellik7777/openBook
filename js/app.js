@@ -1,6 +1,6 @@
 import * as db from './db.js';
 import * as ocr from './ocr.js';
-import { h, icon, iconButton, pixels, toast, sheet, confirmDialog, pickFiles, UrlPool, coverColor, download, safeName } from './ui.js';
+import { h, icon, iconButton, pixels, toast, sheet, confirmDialog, promptDialog, pickFiles, UrlPool, coverColor, download, safeName } from './ui.js';
 import { processCapture, processCover } from './imageproc.js';
 import { openScanner } from './scanner.js';
 import { openReader } from './reader.js';
@@ -11,11 +11,29 @@ import { openStats } from './statsview.js';
 import * as profiles from './profiles.js';
 import * as sync from './sync/sync.js';
 import { clientId, redirectUri } from './sync/oauth.js';
-import { checkPages, describe } from './pagecheck.js';
+import { checkPages, describe, orderByPrinted } from './pagecheck.js';
 import { stripMd } from './rich.js';
 import * as lock from './lock.js';
+import * as vault from './vault.js';
+
+// Darf ein Buch ohne Nachfrage gelesen werden? (gesperrt → entsperrt; verschlüsselt → Tresor offen)
+const canOpenBook = (b) => (b.enc && vault.isSetup() ? vault.isOpen() : !b.locked || lock.isUnlocked() || !lock.isConfigured());
+// Vor dem Sichern: verschlüsselte Bücher brauchen den offenen Tresor
+async function vaultForBackup(bookIds = null) {
+  const enc = (await db.getBooks()).filter((b) => b.enc && (!bookIds || bookIds.includes(b.id)));
+  if (!enc.length || vault.isOpen()) return true;
+  return lock.unlockVault('Gesperrte Bücher sind verschlüsselt. Zum Sichern bitte entsperren.');
+}
 import { searchLibrary, setJump } from './search.js';
 import { bookSize, shrinkPhotos, deletePhotos, fmtBytes } from './storage.js';
+import { getStats, dayKey } from './stats.js';
+
+// Lesestatus je Profil: 'want' (will ich lesen), 'reading', 'done' (gelesen)
+export const STATUS = { reading: 'Lese ich', want: 'Will ich lesen', done: 'Gelesen' };
+export const statusOf = (st) => (st && st.status) || (st && st.lastOpenedAt ? 'reading' : null);
+async function setStatus(bookId, status) {
+  await db.updateState(profiles.currentId(), bookId, { status, statusAt: Date.now() }, { touch: false });
+}
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -34,6 +52,7 @@ const routes = [
   [/^#\/receive$/, () => openReceive(app)],
   [/^#\/rechtliches$/, () => openLegal(app)],
   [/^#\/statistik$/, () => openStats(app)],
+  [/^#\/lernen(?:\/([\w]+))?$/, async (m) => (await import('./cardsview.js')).openCards(app, m[1] || null)],
   [/^#\/page\/([\w]+)\/([\w]+)$/, (m) => openPageEditor(app, m[1], m[2])],
 ];
 
@@ -85,6 +104,9 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
   const grid = h('div', { class: 'grid' });
   const results = h('div', { class: 'search-results', hidden: true });
   let sortMode = localStorage.getItem('ob.sort') || 'recent';
+  let statusFilter = localStorage.getItem('ob.statusFilter') || '';
+  const statusRow = h('div', { class: 'status-row', role: 'tablist', 'aria-label': 'Nach Lesestatus filtern' });
+  const goalEl = h('div', { class: 'goal-wrap' });
   let query = sessionStorage.getItem('ob.q') || '';
 
   if (folderId && !(await db.getFolder(folderId))) { go('#/'); return; }
@@ -127,6 +149,7 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
     ),
     usageCard(),
     await backupReminder(),
+    goalEl,
     h('div', { class: 'search-wrap' }, icon('search'), searchInput),
     results,
     h('div', { class: 'lib-body' },
@@ -135,6 +158,7 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
           tag ? null : iconButton('folderPlus', 'Neuer Ordner', () => folderDialog(null, folderId)),
           sortSel)),
       tagRow,
+      statusRow,
       badge,
       grid,
     ),
@@ -178,9 +202,27 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
     }, '#' + t, h('small', {}, n))));
 
     const inFolder = (b) => (folderIds.has(b.folderId) ? b.folderId : null) === folderId;
-    const shown = books.filter((b) => (tag ? (b.tags || []).includes(tag) : inFolder(b))).sort(sorters[sortMode] || sorters.recent);
-    const subfolders = tag ? [] : folders.filter((f) => (folderIds.has(f.parentId) ? f.parentId : null) === folderId)
+    // Statusfilter: in der obersten Ebene über alle Ordner hinweg
+    const inTree = (b) => {
+      if (!folderId) return true;
+      let f = folderIds.has(b.folderId) ? b.folderId : null;
+      while (f) { if (f === folderId) return true; const x = folders.find((y) => y.id === f); f = x && folderIds.has(x.parentId) ? x.parentId : null; }
+      return false;
+    };
+    const counts = { reading: 0, want: 0, done: 0 };
+    for (const b of books) { const st = statusOf(b._state); if (st && (tag ? (b.tags || []).includes(tag) : inTree(b))) counts[st]++; }
+    statusRow.hidden = !books.length;
+    statusRow.replaceChildren(...[['', 'Alle'], ...Object.entries(STATUS)].map(([k, label]) => h('button', {
+      class: 'status-chip' + (statusFilter === k ? ' on' : ''), role: 'tab', 'aria-selected': String(statusFilter === k),
+      onClick: () => { statusFilter = k; localStorage.setItem('ob.statusFilter', k); fill(); },
+    }, label, k ? h('small', {}, counts[k]) : null)));
+    const shown = books.filter((b) => {
+      if (statusFilter) return statusOf(b._state) === statusFilter && (tag ? (b.tags || []).includes(tag) : inTree(b));
+      return tag ? (b.tags || []).includes(tag) : inFolder(b);
+    }).sort(sorters[sortMode] || sorters.recent);
+    const subfolders = tag || statusFilter ? [] : folders.filter((f) => (folderIds.has(f.parentId) ? f.parentId : null) === folderId)
       .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+    renderGoal();
 
     const count = (fid) => {
       const ids = new Set([fid]);
@@ -189,6 +231,12 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
       return books.filter((b) => ids.has(b.folderId)).length;
     };
 
+    if (!shown.length && !subfolders.length && statusFilter && books.length) {
+      grid.replaceChildren(h('div', { class: 'empty' }, h('h3', {}, `Keine Bücher unter „${STATUS[statusFilter]}“`),
+        h('p', { class: 'muted' }, statusFilter === 'want' ? 'Markiere Bücher in den Buchdetails als „Will ich lesen“.' : statusFilter === 'done' ? 'Bücher, die du bis zum Ende liest, landen automatisch hier.' : 'Öffne ein Buch zum Lesen.'),
+        h('button', { class: 'btn', onClick: () => { statusFilter = ''; localStorage.setItem('ob.statusFilter', ''); fill(); } }, 'Alle anzeigen')));
+      return;
+    }
     if (!shown.length && !subfolders.length) {
       grid.replaceChildren(h('div', { class: 'empty' },
         icon(folderId ? 'folder' : tag ? 'tag' : 'book', 'big'),
@@ -206,13 +254,28 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
     );
   }
 
+  // Tagesziel (Leseminuten) des aktiven Profils
+  async function renderGoal() {
+    const p = profiles.current();
+    const goal = p && p.goalMin;
+    if (!goal) { goalEl.replaceChildren(); return; }
+    const st = await getStats(p.id);
+    const min = Math.floor(((st.days[dayKey()] || {}).sec || 0) / 60);
+    const pct = Math.min(100, Math.round((min / goal) * 100));
+    goalEl.replaceChildren(h('a', { class: 'goal' + (min >= goal ? ' done' : ''), href: '#/statistik', 'aria-label': `Tagesziel: ${min} von ${goal} Minuten` },
+      icon(min >= goal ? 'check' : 'target'),
+      h('span', { class: 'goal-text' }, min >= goal ? `Tagesziel erreicht – ${min} Min. gelesen` : `Heute ${min} von ${goal} Min. gelesen`),
+      h('span', { class: 'goal-bar' }, h('span', { style: { width: pct + '%' } })),
+    ));
+  }
+
   async function runSearch() {
     const q = query.trim();
     body.hidden = q.length >= 2;
     results.hidden = q.length < 2;
     if (q.length < 2) { results.replaceChildren(); return; }
     results.replaceChildren(h('p', { class: 'muted small' }, h('span', { class: 'spinner' }), ' Suche …'));
-    const found = await searchLibrary(q, { canOpen: (b) => !b.locked || lock.isUnlocked() || !lock.isConfigured() });
+    const found = await searchLibrary(q, { canOpen: canOpenBook });
     if (query.trim() !== q) return;
     if (!found.length) { results.replaceChildren(h('p', { class: 'muted' }, `Nichts gefunden für „${q}“.`)); return; }
     const total = found.reduce((s, r) => s + r.total, 0);
@@ -237,7 +300,7 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
   if (query) runSearch();
   let t = null;
   const off = db.onChange((e) => {
-    if (!['book', 'pages', 'sync', 'profile', 'folder'].includes(e.type)) return;
+    if (!['book', 'pages', 'sync', 'profile', 'folder', 'state'].includes(e.type)) return;
     clearTimeout(t);
     t = setTimeout(async () => { multiProfile = (await db.getProfiles()).length > 1; showProfile(); fill(); }, 100);
   });
@@ -354,6 +417,7 @@ async function backupReminder() {
       : `Du hast ${pages} Seiten gescannt, aber noch keine Sicherung erstellt. Fotos liegen nur auf diesem Gerät.`),
     h('div', { class: 'row gap-s wrap' },
       h('button', { class: 'btn small primary', onClick: async () => {
+        if (!(await vaultForBackup())) return;
         const { exportBackup } = await import('./backup.js');
         toast('Sicherung wird erstellt …');
         const blob = await exportBackup();
@@ -434,7 +498,8 @@ function bookTile(book, pool) {
     h('div', { class: 'tile-info' },
       h('div', { class: 'tile-text' },
         h('div', { class: 'tile-title' }, book.title),
-        h('div', { class: 'tile-meta' }, n ? `${pct} % · ${n} S.` : 'Noch keine Seiten'),
+        h('div', { class: 'tile-meta' }, statusOf(book._state) === 'done' ? h('span', { class: 'st-done' }, icon('check'), ` Gelesen · ${n} S.`)
+          : statusOf(book._state) === 'want' ? `Will ich lesen · ${n} S.` : n ? `${pct} % · ${n} S.` : 'Noch keine Seiten'),
       ),
       iconButton('more', 'Buchdetails', async () => { if (await lock.ensureBookAccess(book)) go(`#/book/${book.id}`); }, 'small'),
     ),
@@ -445,6 +510,7 @@ function bookTile(book, pool) {
 
 function newBookDialog(folderId = null) {
   let coverBlob = null;
+  let isbn = null;
   const pool = new UrlPool();
   const title = h('input', { class: 'input', placeholder: 'Titel', required: true, autocomplete: 'off' });
   const author = h('input', { class: 'input', placeholder: 'Autor:in (optional)', autocomplete: 'off' });
@@ -455,21 +521,98 @@ function newBookDialog(folderId = null) {
     coverBlob = await processCover(f);
     preview.replaceChildren(h('img', { src: pool.get(coverBlob), alt: 'Cover' }));
   };
+  const isbnInfo = h('p', { class: 'muted small', hidden: true });
+  const scanIsbnBtn = async () => {
+    const { scanIsbn, lookupIsbn } = await import('./isbn.js');
+    const code = await scanIsbn();
+    if (!code) return;
+    isbn = code;
+    isbnInfo.hidden = false;
+    isbnInfo.replaceChildren(h('span', { class: 'spinner' }), ` ISBN ${code} – suche Titel …`);
+    try {
+      const r = await lookupIsbn(code);
+      if (!r) { isbnInfo.textContent = `ISBN ${code}: kein Eintrag gefunden. Bitte Titel eintippen.`; title.focus(); return; }
+      title.value = r.title;
+      author.value = r.author || author.value;
+      if (r.cover) { coverBlob = await processCover(r.cover); preview.replaceChildren(h('img', { src: pool.get(coverBlob), alt: 'Cover' })); }
+      isbnInfo.textContent = `ISBN ${code} · gefunden bei ${r.source}${r.cover ? '' : ' (ohne Cover)'}`;
+    } catch (err) {
+      isbnInfo.textContent = `ISBN ${code} gespeichert. Nachschlagen nicht möglich: ${err.message}`;
+    }
+  };
   const form = h('form', { class: 'stack', onSubmit: async (e) => {
     e.preventDefault();
     if (!title.value.trim()) { title.focus(); return; }
     const book = await db.createBook({ title: title.value.trim(), author: author.value.trim(), cover: coverBlob });
-    if (folderId) await db.updateBook(book.id, { folderId });
+    if (folderId || isbn) await db.updateBook(book.id, { ...(folderId ? { folderId } : {}), ...(isbn ? { isbn } : {}) });
     db.requestPersistence();
     s.close();
     go(`#/scan/${book.id}`);
   } },
+    h('div', { class: 'row gap-s wrap new-quick' },
+      h('button', { type: 'button', class: 'btn small', onClick: scanIsbnBtn }, icon('barcode'), 'ISBN scannen'),
+      h('button', { type: 'button', class: 'btn small', onClick: () => { s.close(); importDialog(folderId); } }, icon('fileIn'), 'PDF/EPUB importieren'),
+    ),
+    isbnInfo,
     h('button', { type: 'button', class: 'cover-pick-btn', onClick: pickCover }, preview),
     title, author,
     h('button', { class: 'btn primary block', type: 'submit' }, icon('camera'), 'Anlegen & Seiten scannen'),
+    h('p', { class: 'muted small' }, 'ISBN scannen sucht Titel, Autor und Cover online (es wird nur die ISBN an Open Library bzw. Google Books gesendet).'),
   );
   const s = sheet('Neues Buch', form, { onClose: () => pool.clear() });
   setTimeout(() => title.focus(), 250);
+}
+
+// ---------- PDF/EPUB importieren ----------
+
+async function importDialog(folderId = null) {
+  const { ACCEPT, kindOf } = await import('./importer.js');
+  const [file] = await pickFiles({ accept: ACCEPT, multiple: false });
+  if (!file) return;
+  const kind = kindOf(file);
+  if (!kind) { toast('Bitte eine PDF- oder EPUB-Datei wählen'); return; }
+  const keep = h('input', { type: 'checkbox', checked: true });
+  const bar = h('div', { class: 'progress big' }, h('div', { style: { width: '0%' } }));
+  const info = h('p', { class: 'muted small' });
+  const ctl = new AbortController();
+  let running = false;
+  const start = async () => {
+    running = true;
+    startBtn.disabled = true;
+    opts.hidden = true;
+    progress.hidden = false;
+    db.requestPersistence();
+    const mod = await import('./importer.js');
+    const onProgress = (r, txt) => { bar.firstChild.style.width = Math.round(r * 100) + '%'; info.textContent = txt; };
+    try {
+      const res = kind === 'pdf'
+        ? await mod.importPdf(file, { folderId, keepImages: keep.checked, onProgress, signal: ctl.signal, askPassword: (wrong) => promptDialog('PDF mit Kennwort', wrong ? 'Kennwort falsch – bitte erneut eingeben.' : 'Dieses PDF ist geschützt.', { type: 'password', okLabel: 'Öffnen' }) })
+        : await mod.importEpub(file, { folderId, onProgress, signal: ctl.signal });
+      running = false;
+      s.close();
+      toast(ctl.signal.aborted ? 'Import abgebrochen – bisherige Seiten bleiben erhalten'
+        : kind === 'pdf' ? `${res.pages} Seiten importiert` + (res.scanned ? ` · ${res.scanned} ohne Text werden erkannt` : '')
+          : `${res.pages} Abschnitte importiert` + (res.figures ? ` · ${res.figures} Abbildungen` : ''), 4000);
+      go('#/book/' + res.bookId);
+    } catch (e) {
+      running = false;
+      console.error(e);
+      info.textContent = 'Import fehlgeschlagen: ' + (e && e.name === 'PasswordException' ? 'Kennwort fehlt' : e.message);
+      startBtn.disabled = false;
+    }
+  };
+  const opts = h('div', { class: 'stack' },
+    h('p', {}, h('strong', {}, file.name), h('br'), h('span', { class: 'muted small' }, `${kind.toUpperCase()} · ${fmtBytes(file.size)}`)),
+    kind === 'pdf' ? h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Seitenbilder behalten'), h('br'),
+      h('span', { class: 'muted small' }, 'Für die Originalansicht (Formeln, Grafiken). Braucht mehr Speicher. Seiten ohne Textebene behalten ihr Bild immer.')), keep) : null,
+    kind === 'epub' ? h('p', { class: 'muted small' }, 'Kapitel, Überschriften, Bilder, Tabellen und Fußnoten werden übernommen. Kopiergeschützte (DRM) EPUBs lassen sich nicht importieren.') : null,
+    h('p', { class: 'muted small' }, 'Nur für Dateien, die dir gehören bzw. die du nutzen darfst. Die Datei bleibt auf diesem Gerät.'),
+  );
+  const progress = h('div', { class: 'stack', hidden: true }, bar, info,
+    h('button', { class: 'btn small', onClick: () => ctl.abort() }, 'Abbrechen'));
+  const startBtn = h('button', { class: 'btn primary block', onClick: start }, icon('fileIn'), 'Importieren');
+  const s = sheet(kind === 'pdf' ? 'PDF importieren' : 'EPUB importieren', h('div', { class: 'stack' }, opts, progress, startBtn),
+    { onClose: () => { if (running) ctl.abort(); } });
 }
 
 // ---------- Buchdetails ----------
@@ -524,7 +667,7 @@ async function renderBook(bookId) {
   async function fillHead() {
     book = await db.getBook(bookId);
     if (!book) { go('#/'); return; }
-    const pages = await db.getPagesMeta(bookId);
+    const pages = await db.getPagesMeta(bookId, { images: false });
     const state = await db.getState(profiles.currentId(), bookId);
     const done = pages.filter((p) => p.ocrStatus === 'done').length;
     const errs = pages.filter((p) => p.ocrStatus === 'error').length;
@@ -538,6 +681,7 @@ async function renderBook(bookId) {
           `${pages.length} ${pages.length === 1 ? 'Seite' : 'Seiten'} · ${done} erkannt` + (errs ? ` · ${errs} Fehler` : '') + (words ? ` · ca. ${Math.max(1, Math.round(words / 250))} Min. Lesezeit` : '') + ` · ${fmtBytes((await bookSize(bookId)).total)}`,
         ),
         await metaChips(),
+        statusChips(state),
         h('div', { class: 'row gap-s wrap' },
           pages.length ? h('button', { class: 'btn primary', onClick: () => go(`#/read/${bookId}`) }, icon('book'), state && state.position ? 'Weiterlesen' : 'Lesen') : null,
           h('button', { class: 'btn', onClick: () => go(`#/scan/${bookId}`) }, icon('camera'), 'Seiten scannen'),
@@ -566,9 +710,12 @@ async function renderBook(bookId) {
     }
     issuesCard.hidden = false;
     issuesCard.className = 'card issues';
+    const hasOrder = all.some((is) => is.type === 'order');
     const ignore = async (key) => { await db.updateBook(bookId, (b) => ({ ignoredGaps: [...new Set([...(b.ignoredGaps || []), key])] })); };
     issuesCard.replaceChildren(
       h('strong', {}, all.length === 1 ? 'Seitenprüfung: 1 Hinweis' : `Seitenprüfung: ${all.length} Hinweise`),
+      hasOrder ? h('div', { class: 'issue' }, h('span', { class: 'grow' }, 'Einige Seiten stehen nicht in der Reihenfolge ihrer Seitenzahlen.'),
+        h('button', { class: 'btn small primary', onClick: () => sortByNumbers() }, icon('sort'), 'Nach Seitenzahl ordnen')) : null,
       ...all.map((is) => h('div', { class: 'issue' },
         h('span', { class: 'grow' }, describe(is)),
         h('div', { class: 'row gap-s wrap' },
@@ -594,12 +741,39 @@ async function renderBook(bookId) {
     );
   }
 
+  function statusChips(state) {
+    const cur = statusOf(state);
+    return h('div', { class: 'status-row small-row', role: 'group', 'aria-label': 'Lesestatus' },
+      ...Object.entries({ want: STATUS.want, reading: STATUS.reading, done: STATUS.done }).map(([k, label]) => h('button', {
+        class: 'status-chip' + (cur === k ? ' on' : ''), 'aria-pressed': String(cur === k),
+        onClick: async () => { await setStatus(bookId, cur === k ? null : k); fillHead(); },
+      }, k === 'done' ? icon('check') : null, label)));
+  }
+
+  async function sortByNumbers() {
+    const pages = await db.getPagesMeta(bookId);
+    const order = orderByPrinted(pages);
+    if (!order) { toast('Die Seiten stehen schon in der richtigen Reihenfolge'); return; }
+    const moved = order.filter((id, i) => id !== pages[i].id).length;
+    const withNo = pages.filter((p) => p.printedNo).length;
+    if (!(await confirmDialog('Nach Seitenzahl ordnen?', `${moved} Seiten bekommen einen neuen Platz. ${withNo} von ${pages.length} Seiten haben eine erkannte Seitenzahl; Seiten ohne Zahl bleiben hinter ihrer Vorgängerseite.`, 'Ordnen'))) return;
+    const before = book.pageOrder;
+    await db.updateBook(bookId, { pageOrder: order });
+    toast('Seiten neu geordnet');
+    showUndo(() => db.updateBook(bookId, { pageOrder: before }));
+  }
+  function showUndo(fn) {
+    const bar = h('div', { class: 'undo-bar' }, h('span', {}, 'Neu geordnet.'), h('button', { class: 'btn small', onClick: async () => { await fn(); bar.remove(); toast('Rückgängig gemacht'); } }, icon('undo'), 'Rückgängig'));
+    view.append(bar);
+    setTimeout(() => bar.remove(), 10000);
+  }
+
   async function metaChips() {
     const folder = book.folderId ? await db.getFolder(book.folderId) : null;
     const items = [];
     if (folder) items.push(h('a', { class: 'tag-chip folder-chip', href: '#/ordner/' + folder.id }, icon('folder'), folder.name));
     for (const t of book.tags || []) items.push(h('a', { class: 'tag-chip', href: '#/tag/' + encodeURIComponent(t) }, '#' + t));
-    if (book.locked && lock.isConfigured()) items.push(h('span', { class: 'tag-chip' }, icon('lock'), 'gesperrt'));
+    if (book.locked && lock.isConfigured()) items.push(h('span', { class: 'tag-chip' }, icon('lock'), book.enc ? 'gesperrt · verschlüsselt' : 'gesperrt'));
     return items.length ? h('div', { class: 'tag-row' }, ...items) : null;
   }
 
@@ -613,6 +787,8 @@ async function renderBook(bookId) {
           h('button', { class: 'btn primary block', onClick: async () => { await db.updateBook(bookId, { folderId: sel.value || null }); m.close(); toast('Verschoben'); } }, icon('folder'), 'Verschieben'),
           h('button', { class: 'btn block', onClick: () => { m.close(); folderDialog(null, null); } }, icon('folderPlus'), 'Neuen Ordner anlegen')));
       } }, icon('folder'), 'In Ordner verschieben'),
+      h('button', { class: 'menu-item', onClick: () => { s.close(); go('#/lernen/' + bookId); } }, icon('cards'), 'Lernkarten aus Markierungen üben'),
+      h('button', { class: 'menu-item', onClick: () => { s.close(); sortByNumbers(); } }, icon('sort'), 'Seiten nach Seitenzahl ordnen'),
       h('button', { class: 'menu-item', onClick: () => { s.close(); storageDialog(); } }, icon('storage'), 'Speicher sparen'),
       h('button', { class: 'menu-item', onClick: async () => {
         s.close();
@@ -631,6 +807,7 @@ async function renderBook(bookId) {
       h('button', { class: 'menu-item', onClick: () => { s.close(); go(`#/send/${bookId}`); } }, icon('wifi'), 'An eigenes Gerät senden (WLAN, ohne Internet)'),
       h('button', { class: 'menu-item', onClick: async () => {
         s.close();
+        if (!(await vaultForBackup([bookId]))) return;
         const { exportBackup } = await import('./backup.js');
         toast('Sicherung wird erstellt …');
         const blob = await exportBackup([bookId]);
@@ -693,6 +870,7 @@ async function renderBook(bookId) {
     const p2 = new UrlPool();
     const title = h('input', { class: 'input', value: book.title });
     const author = h('input', { class: 'input', value: book.author || '', placeholder: 'Autor:in' });
+    const isbnIn = h('input', { class: 'input', value: book.isbn || '', placeholder: 'ISBN (optional)', inputmode: 'numeric' });
     const prev = h('div', { class: 'cover-pick' });
     const showPrev = () => prev.replaceChildren(cover ? h('img', { src: p2.get(cover), alt: '' }) : h('span', {}, icon('camera'), ' Cover fotografieren'));
     showPrev();
@@ -701,11 +879,19 @@ async function renderBook(bookId) {
     const lockBox = lock.isConfigured() ? h('input', { type: 'checkbox', checked: !!book.locked }) : null;
     const s = sheet('Buch bearbeiten', h('form', { class: 'stack', onSubmit: async (e) => {
       e.preventDefault();
+      // Sperren/Entsperren ver- bzw. entschlüsselt das Buch → Tresor muss offen sein
+      if (lockBox && lockBox.checked !== !!book.locked && lock.vaultReady() && !lock.vaultOpen()
+        && !(await lock.unlockVault(lockBox.checked ? 'Zum Verschlüsseln des Buchs bitte entsperren.' : 'Zum Entschlüsseln bitte entsperren.'))) return;
+      const { normalizeIsbn } = await import('./barcode.js');
+      const isbnVal = isbnIn.value.trim() ? normalizeIsbn(isbnIn.value) : null;
+      if (isbnIn.value.trim() && !isbnVal) { toast('Die ISBN ist ungültig'); isbnIn.focus(); return; }
       await db.updateBook(bookId, {
+        isbn: isbnVal,
         title: title.value.trim() || book.title, author: author.value.trim(), cover,
         folderId: folderSel.value || null, tags: tagsEl.value(), locked: lockBox ? lockBox.checked : !!book.locked,
       });
       s.close();
+      if (lockBox) { await lock.reconcile(); if (lockBox.checked && lock.vaultReady()) toast('Buch gesperrt und verschlüsselt'); }
     } },
       h('button', { type: 'button', class: 'cover-pick-btn', onClick: async () => {
         const [f] = await pickFiles({ multiple: false, capture: 'environment' });
@@ -721,10 +907,25 @@ async function renderBook(bookId) {
         cover ? h('button', { type: 'button', class: 'btn small', onClick: () => { cover = null; showPrev(); } }, 'Cover entfernen') : null,
       ),
       title, author,
+      h('div', { class: 'row gap-s' }, isbnIn,
+        h('button', { type: 'button', class: 'btn small', onClick: async () => {
+          const { normalizeIsbn } = await import('./barcode.js');
+          const code = normalizeIsbn(isbnIn.value);
+          if (!code) { const { scanIsbn } = await import('./isbn.js'); const c = await scanIsbn(); if (c) isbnIn.value = c; return; }
+          const { lookupIsbn } = await import('./isbn.js');
+          toast('Suche …');
+          try {
+            const r = await lookupIsbn(code);
+            if (!r) { toast('Kein Eintrag gefunden'); return; }
+            title.value = r.title; if (r.author) author.value = r.author;
+            if (r.cover) { cover = await processCover(r.cover); showPrev(); }
+            toast('Gefunden bei ' + r.source);
+          } catch (err) { toast(err.message); }
+        } }, icon('barcode'), 'Nachschlagen')),
       h('label', { class: 'stack-s small' }, h('strong', {}, 'Ordner'), folderSel),
       h('div', { class: 'stack-s small' }, h('strong', {}, 'Tags'), tagsEl),
       lockBox
-        ? h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Buch sperren'), h('br'), h('span', { class: 'muted small' }, 'Öffnen nur mit Face ID oder PIN')), lockBox)
+        ? h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Buch sperren'), h('br'), h('span', { class: 'muted small' }, 'Öffnen nur mit Face ID oder PIN. Texte, Fotos und Markierungen werden auf diesem Gerät verschlüsselt gespeichert.')), lockBox)
         : h('p', { class: 'muted small' }, 'Bücher sperren: zuerst unter Einstellungen → App-Sperre Face ID bzw. eine PIN einrichten.'),
       h('button', { class: 'btn primary block', type: 'submit' }, 'Speichern'),
     ), { onClose: () => p2.clear() });
@@ -755,7 +956,8 @@ async function openSettings() {
     onChange: (e) => localStorage.setItem('ob.autoCrop', e.target.checked ? '1' : '0') });
   const s = sheet('Einstellungen', h('div', { class: 'stack' },
     syncEl,
-    h('a', { class: 'card card-link', href: '#/statistik', onClick: () => s.close() }, h('strong', {}, icon('stats'), ' Lesestatistik'), h('span', { class: 'muted small' }, 'Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher')),
+    h('a', { class: 'card card-link', href: '#/statistik', onClick: () => s.close() }, h('strong', {}, icon('stats'), ' Lesestatistik & Tagesziel'), h('span', { class: 'muted small' }, 'Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher')),
+    h('a', { class: 'card card-link', href: '#/lernen', onClick: () => s.close() }, h('strong', {}, icon('cards'), ' Lernkarten'), h('span', { class: 'muted small' }, 'Aus deinen Markierungen in allen Büchern – mit Wiederholung nach dem Karteikasten-Prinzip')),
     lockEl,
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Seiten gerade rücken'), h('br'), h('span', { class: 'muted small' }, 'Seite im Foto finden, Tisch abschneiden, schräge Aufnahmen und Wölbung zur Buchmitte ausgleichen.')), autoCropBox),
     h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Scan-Filter'), h('br'), h('span', { class: 'muted small' }, 'Fotos in Graustufen mit hellem Papier speichern. Bessere Erkennung, weniger Speicher.')), scanFilter),
@@ -780,6 +982,7 @@ async function openSettings() {
       h('p', { class: 'muted small' }, 'Alle Bücher inklusive Fotos als Datei speichern, z. B. für ein neues Handy oder als Backup in der Cloud.'),
       h('div', { class: 'row gap-s wrap' },
         h('button', { class: 'btn small', onClick: async () => {
+          if (!(await vaultForBackup())) return;
           const { exportBackup } = await import('./backup.js');
           toast('Sicherung wird erstellt …');
           const blob = await exportBackup();
@@ -801,7 +1004,7 @@ async function openSettings() {
         } }, icon('upload'), 'Sicherung laden'),
       ),
     ),
-    h('p', { class: 'muted small' }, 'Die Texterkennung läuft lokal, Fotos werden nie hochgeladen. Ohne Synchronisierung bleibt alles nur auf diesem Gerät.'),
+    h('p', { class: 'muted small' }, 'Die Texterkennung läuft lokal. Fotos werden nur hochgeladen, wenn du „Fotos mitsichern“ einschaltest. Ohne Synchronisierung bleibt alles nur auf diesem Gerät.'),
     h('a', { class: 'btn small', href: '#/rechtliches', onClick: () => s.close() }, 'Rechtliches: Nutzung, Datenschutz, Lizenzen'),
   ), { onClose: () => syncEl._off() });
 }
@@ -816,6 +1019,9 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   try {
     await profiles.ensureProfile();
     lock.init();
+    // Tresor geöffnet → gesperrte Bücher (ent)schlüsseln, wartende Texterkennung und Sync nachholen
+    vault.onChange((open) => { if (open) { lock.reconcile().then(() => { ocr.resume(); sync.syncNow(); }); } });
+    db.onChange((e) => { if (e.type === 'sync' && vault.isOpen()) lock.reconcile(); });
     await sync.init(); // verarbeitet ggf. die Rückkehr von der Anmeldeseite
   } catch (e) {
     console.error(e);
@@ -895,7 +1101,7 @@ function syncCard() {
     card.replaceChildren(h('strong', {}, 'Synchronisierung'));
     if (!prov) {
       card.append(
-        h('p', { class: 'muted small' }, 'Texte, Lesepositionen, Lesezeichen und Profile auf all deinen Geräten abgleichen – über deinen eigenen Cloud-Speicher. Fotos bleiben auf dem Gerät.'),
+        h('p', { class: 'muted small' }, 'Texte, Lesepositionen, Lesezeichen, Markierungen, Lernkarten, Lesestatistik und Profile auf all deinen Geräten abgleichen – über deinen eigenen Cloud-Speicher. Fotos nur, wenn du es einschaltest.'),
         h('div', { class: 'row gap-s wrap' },
           ...Object.values(sync.PROVIDERS).map((p) => h('button', {
             class: 'btn small',
@@ -915,9 +1121,16 @@ function syncCard() {
         auth: 'Anmeldung abgelaufen – bitte neu anmelden.',
         offline: 'Offline – wird nachgeholt, sobald Internet da ist.',
       };
+      const photoBox = h('input', { type: 'checkbox', checked: sync.photosEnabled(), onChange: async (e) => {
+        if (e.target.checked && !(await confirmDialog('Fotos mitsichern?', 'Alle Seitenfotos werden zusätzlich in deinen Cloud-Speicher geladen (ca. 0,3 MB pro Seite). Auf anderen Geräten mit derselben Einstellung erscheinen sie dann auch. Gesperrte Bücher sind ausgenommen.', 'Einschalten'))) { e.target.checked = false; return; }
+        sync.setPhotos(e.target.checked);
+        toast(e.target.checked ? 'Fotos werden nach und nach hochgeladen' : 'Fotos werden nicht mehr gesichert');
+      } });
       card.append(
         h('p', { class: 'small' }, `${prov.label}${prov.account() ? ' · ' + prov.account() : ''}`),
         h('p', { class: 'muted small' }, lines[st.state] || ''),
+        h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Fotos mitsichern'), h('br'),
+          h('span', { class: 'muted small' }, 'Seitenfotos als Sicherung in der Cloud – und auf anderen Geräten verfügbar.')), photoBox),
         h('div', { class: 'row gap-s wrap' },
           st.state === 'auth'
             ? h('button', { class: 'btn small primary', onClick: () => prov.connect({ silent: false }) }, 'Neu anmelden')
@@ -986,10 +1199,15 @@ async function lockCard() {
       h('div', { class: 'row gap-s wrap' },
         h('button', { class: 'btn small', onClick: () => lock.lockNow() }, 'Jetzt sperren'),
         h('button', { class: 'btn small', onClick: async () => {
-          if (!(await lock.lockNow('Zum Ausschalten bitte bestätigen.'))) return;
-          lock.disable(); render(); toast('App-Sperre ausgeschaltet');
+          if (!(await lock.lockNow('Zum Ausschalten bitte bestätigen.', { needVault: lock.vaultReady() }))) return;
+          if (await lock.disable()) { render(); toast('App-Sperre ausgeschaltet'); }
         } }, 'Ausschalten')),
-      h('p', { class: 'muted small' }, 'Hinweis: Die Sperre schützt vor neugierigen Blicken. Sie verschlüsselt die Daten im Browser-Speicher nicht.'),
+      lock.vaultReady()
+        ? h('p', { class: 'muted small' }, icon('lock'), ' Gesperrte Bücher werden auf diesem Gerät verschlüsselt gespeichert (AES-256). ',
+          lock.hasBiometrics() && !lock.faceIdOpensVault() ? 'Face ID entsperrt auf diesem Gerät nur die Ansicht – für verschlüsselte Bücher wird die PIN gebraucht.' : lock.hasBiometrics() ? 'Face ID öffnet auch die verschlüsselten Bücher.' : '')
+        : h('div', { class: 'stack-s' }, h('p', { class: 'muted small' }, 'Neu: Gesperrte Bücher können verschlüsselt gespeichert werden. Dazu einmal mit der PIN entsperren.'),
+          h('button', { class: 'btn small', onClick: async () => { if (await lock.unlockVault('Bitte PIN eingeben, um die Verschlüsselung einzurichten.')) { render(); toast('Verschlüsselung eingerichtet'); } } }, icon('lock'), 'Verschlüsselung einrichten')),
+      h('p', { class: 'muted small' }, 'Die Sperre der ganzen App schützt vor neugierigen Blicken; verschlüsselt werden die als „gesperrt“ markierten Bücher.'),
     );
   };
   const setupDialog = () => {

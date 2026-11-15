@@ -3,7 +3,7 @@
 import * as db from './db.js';
 import * as profiles from './profiles.js';
 import { getStats, dayKey } from './stats.js';
-import { h, iconButton, pixels } from './ui.js';
+import { h, icon, iconButton, pixels, toast } from './ui.js';
 
 const fmtMin = (sec) => {
   const m = Math.round(sec / 60);
@@ -26,6 +26,36 @@ export async function openStats(root) {
   const cursor = new Date(now);
   if (!secOf(cursor)) cursor.setDate(cursor.getDate() - 1);
   while (secOf(cursor) >= 60) { streak++; cursor.setDate(cursor.getDate() - 1); }
+
+  // Tagesziel
+  const goal = profile.goalMin || 0;
+  let goalDays = 0;
+  if (goal) {
+    const c2 = new Date(now);
+    if (secOf(c2) < goal * 60) c2.setDate(c2.getDate() - 1);
+    while (secOf(c2) >= goal * 60) { goalDays++; c2.setDate(c2.getDate() - 1); }
+  }
+  const goalSeg = h('div', { class: 'segmented goal-seg', role: 'group', 'aria-label': 'Tagesziel in Minuten' },
+    ...[[0, 'Aus'], [10, '10'], [20, '20'], [30, '30'], [45, '45'], [60, '60']].map(([v, l]) => h('button', {
+      class: v === goal ? 'on' : '', 'aria-pressed': String(v === goal),
+      onClick: async () => {
+        const p = await db.getProfile(profile.id);
+        p.goalMin = v || null;
+        await db.putProfile(p);
+        await profiles.switchTo(p.id);
+        toast(v ? `Tagesziel: ${v} Minuten` : 'Tagesziel aus');
+        root.replaceChildren();
+        openStats(root);
+      },
+    }, l)));
+  const goalCard = h('section', { class: 'card stat-card' },
+    h('h2', { class: 'stat-h2' }, pixels('small'), 'Tagesziel'),
+    goal ? h('p', { class: 'small' }, icon(secOf(now) >= goal * 60 ? 'check' : 'target'),
+      secOf(now) >= goal * 60 ? ` Heute erreicht (${fmtMin(secOf(now))}).` : ` Heute ${fmtMin(secOf(now))} von ${goal} Min.`,
+      ` Ziel ${goalDays === 1 ? 'an 1 Tag' : `an ${goalDays} Tagen`} in Folge erreicht.`) : h('p', { class: 'muted small' }, 'Wie viele Minuten möchtest du täglich lesen? Die Bibliothek zeigt dann deinen Fortschritt.'),
+    goalSeg,
+    h('p', { class: 'muted small' }, 'Minuten pro Tag'),
+  );
 
   const tiles = h('div', { class: 'stat-tiles' },
     ...[['Heute', fmtMin(secOf(now))], ['Letzte 7 Tage', fmtMin(week)], ['Tage in Folge', String(streak)], ['Gesamt', fmtMin(total)]]
@@ -83,8 +113,9 @@ export async function openStats(root) {
       iconButton('back', 'Zurück', () => { history.length > 1 ? history.back() : (location.hash = '#/'); }),
       h('h1', { class: 'grow tr-title' }, 'Lesestatistik'),
     ),
-    h('p', { class: 'muted small' }, `Profil „${profile.name}“ · gezählt wird die Zeit, in der du liest oder vorlesen lässt (nur auf diesem Gerät).`),
+    h('p', { class: 'muted small' }, `Profil „${profile.name}“ · gezählt wird die Zeit, in der du liest oder vorlesen lässt` + (st.devices > 1 ? ` – auf ${st.devices} Geräten zusammen.` : ' (mit Synchronisierung über alle Geräte).')),
     tiles,
+    goalCard,
     h('section', { class: 'card stat-card' },
       h('div', { class: 'row between' }, h('h2', { class: 'stat-h2' }, pixels('small'), 'Lesezeit, letzte 14 Tage'), h('span', { class: 'muted small' }, 'Minuten')),
       chart, axis, table, toggle,

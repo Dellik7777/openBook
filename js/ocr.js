@@ -203,7 +203,7 @@ function markStyles(data, gray) {
   let debug = null;
   try { if (localStorage.getItem('ob.debug')) debug = []; } catch (e) { /* ignorieren */ }
   try { detectStyles(gray, words, 1, debug); } catch (e) { console.warn('Stil-Erkennung fehlgeschlagen', e); }
-  if (debug) window.__obStyleDebug = debug;
+  if (debug) { window.__obStyleDebug = debug; window.__obOcrData = data; }
 }
 
 // Wörter, bei denen die Erkennung unsicher war (zum gezielten Nachprüfen im Editor)

@@ -105,6 +105,10 @@ export const onedrive = {
     return { data: as === 'blob' ? await dl.blob() : await dl.text(), version: meta.eTag };
   },
 
+  async remove(name) {
+    await api(`${ROOT}:/${encodeURIComponent(name)}`, { method: 'DELETE' }, true);
+  },
+
   // ifVersion: undefined = egal, null = Datei darf noch nicht existieren, sonst erwarteter eTag
   async write(name, data, type, { ifVersion } = {}) {
     const headers = { 'Content-Type': type };

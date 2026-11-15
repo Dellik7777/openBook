@@ -100,6 +100,14 @@ export const google = {
     return { data: as === 'blob' ? await res.blob() : await res.text(), version: f.version };
   },
 
+  async remove(name) {
+    if (!files) await this.begin();
+    const f = files.get(name);
+    if (!f) return;
+    await api(`${API}/files/${f.id}`, { method: 'DELETE' }, true);
+    files.delete(name);
+  },
+
   // ifVersion: undefined = egal, null = Datei darf noch nicht existieren, sonst erwartete Version
   async write(name, data, type, { ifVersion } = {}) {
     if (!files) await this.begin();

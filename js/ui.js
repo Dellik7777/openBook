@@ -66,6 +66,13 @@ const P = {
   figure: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-8 8"/>',
   cloud: '<path d="M7 18.5h10.5a4 4 0 0 0 .4-7.98A6 6 0 0 0 6.3 9.6 4.5 4.5 0 0 0 7 18.5z"/>',
   zoom: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M11 8v6M8 11h6"/>',
+  barcode: '<path d="M4 5v14M7 5v14M10 5v14M14 5v14M16 5v14M20 5v14"/>',
+  fileIn: '<path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M13 11v7M10 15l3 3 3-3"/>',
+  sort: '<path d="M7 4v16M4 17l3 3 3-3"/><path d="M14 6h6M14 11h4M14 16h2"/>',
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.8"/>',
+  cards: '<rect x="3" y="7" width="14" height="12" rx="1.5"/><path d="M7 4h12.5a1.5 1.5 0 0 1 1.5 1.5V16"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
 };
 
 export function icon(name, cls = '') {
@@ -131,6 +138,23 @@ export function confirmDialog(title, text, okLabel = 'OK', danger = false) {
         h('button', { class: 'btn ' + (danger ? 'danger' : 'primary'), onClick: () => { done = true; s.close(); resolve(true); } }, okLabel),
       ),
     ), { onClose: () => { if (!done) resolve(false); } });
+  });
+}
+
+// Eingabe-Dialog → eingegebener Text oder null (abgebrochen)
+export function promptDialog(title, text, { type = 'text', placeholder = '', okLabel = 'OK', value = '' } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const input = h('input', { class: 'input', type, placeholder, value, autocomplete: 'off' });
+    const s = sheet(title, h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); done = true; s.close(); resolve(input.value); } },
+      text ? h('p', { class: 'muted' }, text) : null,
+      input,
+      h('div', { class: 'row end gap' },
+        h('button', { type: 'button', class: 'btn', onClick: () => { done = true; s.close(); resolve(null); } }, 'Abbrechen'),
+        h('button', { type: 'submit', class: 'btn primary' }, okLabel),
+      ),
+    ), { onClose: () => { if (!done) resolve(null); } });
+    setTimeout(() => input.focus(), 250);
   });
 }
 

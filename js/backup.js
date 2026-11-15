@@ -15,7 +15,8 @@ export async function exportBackup(bookIds = null, { photos = true } = {}) {
   const allStates = await db.getAllStates();
   for (const b of books) {
     const pages = await db.getPagesMeta(b.id);
-    const { cover, ...rest } = b;
+    const { cover, enc, ...rest } = b; // Sicherung enthält Klartext → nicht als verschlüsselt markieren
+    void enc;
     if (cover) zip.file(`books/${b.id}/cover.jpg`, cover);
     meta.books.push({
       ...rest,
@@ -96,6 +97,8 @@ export async function importBackupDetailed(file) {
       ignoredGaps: mb.ignoredGaps || [],
       folderId: null,
       tags: mb.tags || [],
+      isbn: mb.isbn || null,
+      source: mb.source || null,
     });
     for (const mf of mb.figures || []) {
       const image = await blobOf(zip, `books/${mb.id}/figures/${mf.id}.jpg`);
