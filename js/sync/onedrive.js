@@ -1,6 +1,6 @@
-// OneDrive: Daten liegen im App-Ordner „Apps/openBook“ des Nutzers.
+// OneDrive: Daten liegen im App-Ordner „Apps/<Name der App-Registrierung>“ des Nutzers.
 // Anmeldung per OAuth 2.0 Authorization Code + PKCE (ohne Server). Das Erneuerungs-Token
-// hält die Anmeldung aktiv, solange openBook mindestens etwa einmal am Tag genutzt wird.
+// hält die Anmeldung aktiv, solange Lesepixel mindestens etwa einmal am Tag genutzt wird.
 
 import { AuthError, ConflictError, redirectUri, clientId, randomString, pkceChallenge, savePending, loadToken, storeToken, cleanUrl } from './oauth.js';
 

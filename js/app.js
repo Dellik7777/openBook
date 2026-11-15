@@ -99,7 +99,7 @@ async function renderLibrary() {
 
   const view = h('div', { class: 'page library' },
     h('header', { class: 'topbar' },
-      h('h1', { class: 'brand' }, pixels(), 'openBook'),
+      h('h1', { class: 'brand' }, pixels(), h('span', {}, 'Lese', h('span', { class: 'brand-accent' }, 'pixel'))),
       h('div', { class: 'row gap-s' },
         syncIndicator,
         iconButton('settings', 'Einstellungen & Sicherung', () => openSettings()),
@@ -131,7 +131,7 @@ async function renderLibrary() {
       grid.replaceChildren(h('div', { class: 'empty' },
         icon('book', 'big'),
         h('h3', {}, 'Noch keine Bücher'),
-        h('p', { class: 'muted' }, 'Lege ein Buch an und fotografiere die Seiten. openBook erkennt den Text und du kannst das Buch danach überall lesen, auch ohne Internet.'),
+        h('p', { class: 'muted' }, 'Lege ein Buch an und fotografiere die Seiten. Lesepixel erkennt den Text und du kannst das Buch danach überall lesen, auch ohne Internet.'),
         h('button', { class: 'btn primary', onClick: () => newBookDialog() }, icon('plus'), 'Erstes Buch anlegen'),
       ));
       return;
@@ -287,7 +287,7 @@ async function renderBook(bookId) {
     const files = await pickFiles({ multiple: true });
     if (!files.length) return;
     files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }) || a.lastModified - b.lastModified);
-    const split = await confirmDialog('Doppelseiten?', 'Zeigen die Fotos jeweils zwei Buchseiten nebeneinander? Dann teilt openBook jedes Foto in eine linke und rechte Seite.', 'Ja, teilen');
+    const split = await confirmDialog('Doppelseiten?', 'Zeigen die Fotos jeweils zwei Buchseiten nebeneinander? Dann teilt Lesepixel jedes Foto in eine linke und rechte Seite.', 'Ja, teilen');
     const scanFilter = localStorage.getItem('ob.scanFilter') !== '0';
     toast(`${files.length} Fotos werden verarbeitet …`);
     let n = 0;
@@ -389,7 +389,7 @@ async function renderBook(bookId) {
         const { exportBackup } = await import('./backup.js');
         toast('Sicherung wird erstellt …');
         const blob = await exportBackup([bookId]);
-        download(blob, safeName(book.title) + '.openbook.zip');
+        download(blob, safeName(book.title) + '.lesepixel.zip');
       } }, icon('download'), 'Buch sichern (mit Fotos)'),
       h('button', { class: 'menu-item', onClick: async () => {
         s.close();
@@ -477,7 +477,7 @@ async function openSettings() {
       ),
       !persisted ? h('button', { class: 'btn small', onClick: async () => {
         const ok = await db.requestPersistence();
-        toast(ok ? 'Dauerhafter Speicher aktiviert' : 'Der Browser hat das abgelehnt. Installiere openBook auf dem Startbildschirm.');
+        toast(ok ? 'Dauerhafter Speicher aktiviert' : 'Der Browser hat das abgelehnt. Installiere Lesepixel auf dem Startbildschirm.');
       } }, 'Dauerhaften Speicher anfordern') : null,
     ),
     h('div', { class: 'card' },
@@ -493,10 +493,10 @@ async function openSettings() {
           const { exportBackup } = await import('./backup.js');
           toast('Sicherung wird erstellt …');
           const blob = await exportBackup();
-          download(blob, `openbook-sicherung-${new Date().toISOString().slice(0, 10)}.openbook.zip`);
+          download(blob, `lesepixel-sicherung-${new Date().toISOString().slice(0, 10)}.lesepixel.zip`);
         } }, icon('download'), 'Alles sichern'),
         h('button', { class: 'btn small', onClick: async () => {
-          const [f] = await pickFiles({ accept: '.zip,.openbook,application/zip', multiple: false });
+          const [f] = await pickFiles({ accept: '.zip,.openbook,.lesepixel,application/zip', multiple: false });
           if (!f) return;
           const { importBackup } = await import('./backup.js');
           try {
@@ -660,7 +660,7 @@ function usageCard() {
   if (ok) return null;
   const card = h('div', { class: 'card notice' },
     h('strong', {}, 'Bitte beachten'),
-    h('p', { class: 'small' }, 'openBook ist für eigene Dokumente und Notizen, gemeinfreie oder vergriffene Bücher und einzelne Auszüge gedacht. Ein aktuelles Buch vollständig zu digitalisieren, ist in Deutschland auch privat grundsätzlich nicht erlaubt – selbst wenn es dir gehört.'),
+    h('p', { class: 'small' }, 'Lesepixel ist für eigene Dokumente und Notizen, gemeinfreie oder vergriffene Bücher und einzelne Auszüge gedacht. Ein aktuelles Buch vollständig zu digitalisieren, ist in Deutschland auch privat grundsätzlich nicht erlaubt – selbst wenn es dir gehört.'),
     h('div', { class: 'row gap-s wrap' },
       h('button', { class: 'btn small primary', onClick: () => { try { localStorage.setItem('ob.legalOk', '1'); } catch (e) { /* */ } card.remove(); } }, 'Verstanden'),
       h('a', { class: 'btn small', href: '#/rechtliches' }, 'Mehr erfahren'),

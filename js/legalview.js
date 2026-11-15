@@ -25,7 +25,7 @@ function anbieter() {
 
 export function usageNotice() {
   return [
-    h('p', {}, 'openBook ist ein Werkzeug, um Gedrucktes abzufotografieren, den Text zu erkennen und bequem zu lesen. Wofür du es einsetzt, liegt in deiner Verantwortung.'),
+    h('p', {}, 'Lesepixel ist ein Werkzeug, um Gedrucktes abzufotografieren, den Text zu erkennen und bequem zu lesen. Wofür du es einsetzt, liegt in deiner Verantwortung.'),
     h('p', {}, h('strong', {}, 'Ohne Bedenken:'), ' eigene Dokumente und Notizen, Texte, deren Urheber seit über 70 Jahren tot sind (gemeinfrei), Werke mit Erlaubnis des Rechteinhabers sowie einzelne Auszüge (z. B. Kapitel oder Seiten) für den privaten Gebrauch.'),
     h('p', {}, h('strong', {}, 'Nicht erlaubt:'), ' Ein urheberrechtlich geschütztes Buch im Wesentlichen vollständig zu kopieren ist in Deutschland auch für den privaten Gebrauch grundsätzlich nur zulässig, wenn es von Hand abgeschrieben wird, der Rechteinhaber zustimmt oder das Buch seit mindestens zwei Jahren vergriffen ist (§ 53 Abs. 4 b UrhG). Das gilt auch für Bücher, die dir gehören.'),
     h('p', {}, 'Gescannte Inhalte dürfen nicht an andere weitergegeben oder veröffentlicht werden. Die Übertragungs- und Synchronisierungsfunktionen sind nur für deine eigenen Geräte gedacht.'),
@@ -72,7 +72,7 @@ export async function openLegal(root) {
     )),
 
     h('div', { id: 'legal-lizenzen' }, section('Lizenzen',
-      h('p', {}, 'openBook enthält folgende freie Software und Schriften. Die vollständigen Lizenztexte liegen im Ordner vendor/ des Quellcodes.'),
+      h('p', {}, 'Lesepixel enthält folgende freie Software und Schriften. Die vollständigen Lizenztexte liegen im Ordner vendor/ des Quellcodes.'),
       h('ul', { class: 'lic' },
         ...[
           ['Tesseract.js & Tesseract-Kern (Texterkennung)', 'Apache License 2.0'],

@@ -13,7 +13,7 @@ function hints() {
       h('li', {}, 'Beide Geräte müssen im selben WLAN sein – oder eines macht einen Hotspot auf und das andere verbindet sich damit. Internet ist nicht nötig.'),
       h('li', {}, 'Gäste-WLANs und manche Firmen-/Hotel-WLANs verbieten Verbindungen zwischen Geräten. Dann einen Hotspot verwenden.'),
       h('li', {}, 'VPN auf beiden Geräten ausschalten.'),
-      h('li', {}, 'openBook auf beiden Geräten geöffnet lassen, bis die Übertragung fertig ist.'),
+      h('li', {}, 'Lesepixel auf beiden Geräten geöffnet lassen, bis die Übertragung fertig ist.'),
     ),
   );
 }
@@ -104,7 +104,7 @@ export async function openSend(root, bookId) {
       h('div', { class: 'card tr-step' },
         h('div', { class: 'tr-num' }, '1'),
         h('div', { class: 'grow' },
-          h('strong', {}, 'Auf dem anderen Gerät: openBook → Einstellungen → „Buch empfangen“'),
+          h('strong', {}, 'Auf dem anderen Gerät: Lesepixel → Einstellungen → „Buch empfangen“'),
           h('p', { class: 'muted small' }, 'und diesen Code scannen.')),
       ),
       h('div', { class: 'tr-qrwrap' }, qr),
@@ -125,7 +125,7 @@ export async function openSend(root, bookId) {
     try {
       stopScan = await startScanner(video, async (text) => {
         const sig = await decodeSignal(text).catch(() => null);
-        if (!sig) { status.textContent = 'Das ist kein openBook-Code.'; return false; }
+        if (!sig) { status.textContent = 'Das ist kein Lesepixel-Code.'; return false; }
         if (sig.kind !== 'a') { status.textContent = 'Das ist der eigene Code – bitte den Antwort-Code des anderen Geräts scannen.'; return false; }
         if (sig.sid !== sender.sid) { status.textContent = 'Der Code gehört zu einer anderen Übertragung. Auf dem anderen Gerät neu scannen.'; return false; }
         connect(sig.sdp);
@@ -202,7 +202,7 @@ export async function openReceive(root) {
     try {
       stopScan = await startScanner(video, async (text) => {
         const sig = await decodeSignal(text).catch(() => null);
-        if (!sig) { status.textContent = 'Das ist kein openBook-Code.'; return false; }
+        if (!sig) { status.textContent = 'Das ist kein Lesepixel-Code.'; return false; }
         if (sig.kind !== 'o') { status.textContent = 'Bitte den Code des sendenden Geräts scannen.'; return false; }
         status.textContent = 'Erkannt – Antwort wird erstellt …';
         // Kamera läuft beim Erstellen der Antwort noch (für eine zuverlässigere Verbindung)

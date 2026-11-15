@@ -1,8 +1,10 @@
-# openBook 📖
+# Lesepixel 📖
 
 **Gedrucktes abfotografieren und überall lesen – wie ein E-Book.**
 
-openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigener Dokumente, Notizen, Unterlagen oder Bücher (siehe [Rechtliches](#rechtliches)). Die App erkennt den Text direkt auf dem Gerät und macht daraus ein E-Book mit anpassbarer Schrift, Nachtmodus, Lesezeichen und Suche. Fotos und Texterkennung bleiben auf deinem Gerät. Optional werden Texte und Lesestände über **deinen eigenen** Google Drive oder OneDrive zwischen iPhone, iPad und Android abgeglichen.
+> Früher „openBook“. Repository und Web-Adresse (`…github.io/openBook/`) behalten den alten Namen, damit installierte Apps, gespeicherte Bücher und Sync-Einstellungen weiter funktionieren.
+
+Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigener Dokumente, Notizen, Unterlagen oder Bücher (siehe [Rechtliches](#rechtliches)). Die App erkennt den Text direkt auf dem Gerät und macht daraus ein E-Book mit anpassbarer Schrift, Nachtmodus, Lesezeichen und Suche. Fotos und Texterkennung bleiben auf deinem Gerät. Optional werden Texte und Lesestände über **deinen eigenen** Google Drive oder OneDrive zwischen iPhone, iPad und Android abgeglichen.
 
 ## Funktionen
 
@@ -11,7 +13,7 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigener
 - **Doppelseiten-Modus**: ein Foto vom aufgeschlagenen Buch wird automatisch in linke und rechte Seite geteilt
 - Scan-Filter (Graustufen, helles Papier), Taschenlampe, „Zurück“ für die letzte Aufnahme
 - Import vorhandener Fotos aus der Galerie
-- **Seitenprüfung:** openBook liest die gedruckten Seitenzahlen mit und meldet sofort, wenn eine Seite fehlt, doppelt ist oder in falscher Reihenfolge liegt. Mit „Nachscannen“ wird die fehlende Seite an der richtigen Stelle eingefügt, mit „Passt so“ wird der Hinweis ausgeblendet
+- **Seitenprüfung:** Lesepixel liest die gedruckten Seitenzahlen mit und meldet sofort, wenn eine Seite fehlt, doppelt ist oder in falscher Reihenfolge liegt. Mit „Nachscannen“ wird die fehlende Seite an der richtigen Stelle eingefügt, mit „Passt so“ wird der Hinweis ausgeblendet
 - **Abbildungs-Modus:** Karten, Bilder und Diagramme in Farbe als ganze Seite fotografieren
 
 **Texterkennung (OCR)**
@@ -36,12 +38,12 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigener
 **Leseprofile & Synchronisierung**
 - Mehrere **Leseprofile** (z. B. für die Familie): jedes mit eigener Leseposition, eigenen Lesezeichen und Schrifteinstellungen
 - **Sync über Google Drive oder OneDrive**: Texte, Profile, Lesepositionen, Lesezeichen und Cover auf allen Geräten, ohne eigenen Server (Fotos bleiben lokal). Einrichtung: siehe **[SYNC.md](SYNC.md)**
-- Auf einem anderen Gerät weitergelesen? openBook springt an die neueste Stelle
+- Auf einem anderen Gerät weitergelesen? Lesepixel springt an die neueste Stelle
 
 **Buch an eigenes Gerät senden (ohne Internet)**
 - Direktübertragung per **WLAN oder Hotspot**: Verbindungsaufbau über zwei QR-Codes, danach gehen die Daten direkt von Gerät zu Gerät, ohne Internet, Server oder Cloud
 - Funktioniert auch zwischen iPhone, iPad und Android; Fotos optional
-- Kein gemeinsames WLAN? openBook zeigt einen **WLAN-QR-Code** für den Hotspot, den das andere Gerät mit der normalen Kamera-App scannt
+- Kein gemeinsames WLAN? Lesepixel zeigt einen **WLAN-QR-Code** für den Hotspot, den das andere Gerät mit der normalen Kamera-App scannt
 
 **Verwalten**
 - Bibliothek mit Covern (Foto oder automatisch erzeugt) und Lesefortschritt
@@ -51,7 +53,7 @@ openBook ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigener
 
 ## Installieren
 
-openBook braucht **HTTPS** (für Kamera und Offline-Modus). Am einfachsten geht das mit GitHub Pages:
+Lesepixel braucht **HTTPS** (für Kamera und Offline-Modus). Am einfachsten geht das mit GitHub Pages:
 
 1. Den Code auf den Branch `main` bringen.
 2. Im Repository **Settings → Pages → Build and deployment → Source: GitHub Actions** wählen.
@@ -60,7 +62,7 @@ openBook braucht **HTTPS** (für Kamera und Offline-Modus). Am einfachsten geht 
    - **iPhone (Safari):** Teilen → „Zum Home-Bildschirm“
    - **Android (Chrome):** Menü ⋮ → „App installieren“
 
-Danach startet openBook wie eine normale App und funktioniert auch ohne Internet.
+Danach startet Lesepixel wie eine normale App und funktioniert auch ohne Internet.
 
 ### Lokal ausprobieren
 
@@ -80,11 +82,11 @@ Es gibt keinen Build-Schritt und keine Abhängigkeiten. Alles liegt im Repositor
 
 ## Daten & Speicher
 
-Bücher liegen in der IndexedDB des Browsers. Mit Synchronisierung liegt zusätzlich der Text (ca. 0,5 MB pro Buch) in deinem Cloud-Speicher. Eine Seite braucht etwa 200 bis 400 KB, ein Buch mit 300 Seiten also ungefähr 60 bis 120 MB. openBook fragt nach dauerhaftem Speicher. Trotzdem gilt: **regelmäßig eine Sicherung erstellen** (Einstellungen → Alles sichern), besonders vor einem Handywechsel.
+Bücher liegen in der IndexedDB des Browsers. Mit Synchronisierung liegt zusätzlich der Text (ca. 0,5 MB pro Buch) in deinem Cloud-Speicher. Eine Seite braucht etwa 200 bis 400 KB, ein Buch mit 300 Seiten also ungefähr 60 bis 120 MB. Lesepixel fragt nach dauerhaftem Speicher. Trotzdem gilt: **regelmäßig eine Sicherung erstellen** (Einstellungen → Alles sichern), besonders vor einem Handywechsel.
 
 ## Rechtliches
 
-openBook ist ein Werkzeug; wofür es eingesetzt wird, liegt in der Verantwortung der Nutzer.
+Lesepixel ist ein Werkzeug; wofür es eingesetzt wird, liegt in der Verantwortung der Nutzer.
 
 - **Unbedenklich:** eigene Dokumente und Notizen, gemeinfreie Werke (Urheber seit über 70 Jahren tot), Werke mit Erlaubnis des Rechteinhabers, einzelne Auszüge für den privaten Gebrauch.
 - **Nicht erlaubt:** ein urheberrechtlich geschütztes Buch im Wesentlichen vollständig zu kopieren – auch privat und auch bei eigenen Büchern –, es sei denn, es wird von Hand abgeschrieben, der Rechteinhaber stimmt zu oder das Buch ist seit mindestens zwei Jahren vergriffen (§ 53 Abs. 4 b UrhG).

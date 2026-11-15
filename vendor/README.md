@@ -1,6 +1,6 @@
 # Mitgelieferte Bibliotheken
 
-Damit openBook komplett offline funktioniert, liegen diese Dateien direkt im Repository (kein CDN):
+Damit Lesepixel komplett offline funktioniert, liegen diese Dateien direkt im Repository (kein CDN):
 
 | Ordner | Quelle | Lizenz |
 |---|---|---|

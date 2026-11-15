@@ -109,7 +109,7 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
 
   async function start() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      showMessage('Die Kamera ist hier nicht verfügbar. Nutze „Aus Galerie importieren“ oder öffne openBook über HTTPS.');
+      showMessage('Die Kamera ist hier nicht verfügbar. Nutze „Aus Galerie importieren“ oder öffne Lesepixel über HTTPS.');
       return;
     }
     try {
