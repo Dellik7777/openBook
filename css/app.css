@@ -610,6 +610,13 @@ html.locked #app { visibility: hidden; }
 .tts-bar { position: absolute; left: 12px; right: 12px; bottom: calc(var(--safe-bottom) + 34px); z-index: 7; max-width: 520px; margin: 0 auto; display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 14px; background: #293244; color: #fff; border-radius: 4px; box-shadow: 0 6px 24px rgba(0,0,0,.25); font: 600 14px var(--font-ui); }
 .tts-bar > .icon { color: #F28C28; }
 .tts-bar .icon-btn { color: #fff; }
+.tts-voice { display: flex; align-items: center; gap: 8px; min-width: 0; background: none; border: 0; color: #fff; font: inherit; padding: 6px 4px; text-align: left; cursor: pointer; }
+.tts-voice .icon { color: #F28C28; flex: none; }
+.tts-voice .tts-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: underline dotted rgba(255,255,255,.5); text-underline-offset: 3px; }
+.voice-q { font: 600 11px var(--font-ui); padding: 2px 6px; border-radius: 4px; background: var(--line, #e3e3e3); color: var(--muted, #666); }
+.voice-q.q3, .voice-q.q2 { background: #F28C28; color: #fff; }
+.voice-help summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.voice-help p { margin: 6px 0; }
 .tts-rate { background: #3B4760; color: #fff; border: 0; border-radius: 4px; font: 600 13px var(--font-ui); padding: 6px 10px; }
 .toc { display: flex; flex-direction: column; }
 .toc-item { display: flex; gap: 10px; align-items: baseline; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 11px 4px; font-size: 15px; }
