@@ -780,3 +780,24 @@ html.locked #app { visibility: hidden; }
 .version-line { text-align: center; margin-top: 8px; }
 .news-list { margin: 6px 0 0; padding-left: 20px; line-height: 1.5; }
 .news-list li { margin: 4px 0; }
+
+/* Hörbuch-Player */
+.audio-player { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: calc(var(--safe-top, 0px) + 8px) 24px calc(var(--safe-bottom, 0px) + 20px); background: var(--r-bg); color: var(--r-ink); overflow-y: auto; animation: ap-in .22s ease-out; }
+@keyframes ap-in { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.ap-top { align-self: stretch; display: flex; align-items: center; }
+.ap-top .icon-btn { color: var(--r-ink); }
+.ap-cover { width: min(64vw, 300px); aspect-ratio: 1; object-fit: cover; border-radius: 8px; box-shadow: 0 14px 40px rgba(0,0,0,.28); margin: 8px 0 6px; background: #293244; }
+.ap-title { font: 700 20px var(--font-ui); text-align: center; }
+.ap-author { color: var(--r-muted); font: 500 15px var(--font-ui); margin-top: -6px; }
+.ap-chapter { font: 600 15px var(--font-ui); text-align: center; color: #F28C28; min-height: 20px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-progress { align-self: stretch; height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--r-ink) 15%, transparent); overflow: hidden; }
+.ap-progress > div { height: 100%; background: #F28C28; border-radius: 3px; transition: width .4s; }
+.ap-progress.thin { height: 3px; margin-top: 10px; }
+.ap-times { align-self: stretch; text-align: center; color: var(--r-muted); font: 500 13px var(--font-ui); }
+.ap-controls { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 10px 0; }
+.ap-btn { width: 52px; height: 52px; border-radius: 50%; border: 0; background: none; color: var(--r-ink); display: grid; place-items: center; cursor: pointer; }
+.ap-btn .icon { width: 30px; height: 30px; }
+.ap-play { width: 76px; height: 76px; border-radius: 50%; border: 0; background: #F28C28; color: #fff; display: grid; place-items: center; cursor: pointer; box-shadow: 0 8px 22px rgba(242,140,40,.4); }
+.ap-play .icon { width: 36px; height: 36px; }
+.ap-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.ap-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid color-mix(in srgb, var(--r-ink) 20%, transparent); background: none; color: var(--r-ink); border-radius: 18px; padding: 7px 12px; font: 600 13px var(--font-ui); cursor: pointer; }

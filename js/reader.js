@@ -102,6 +102,7 @@ export async function openReader(root, bookId) {
     iconButton('font', 'Schrift & Darstellung', () => openTypography()),
     iconButton('search', 'Im Buch suchen', () => openSearch()),
     iconButton('speaker', 'Vorlesen', () => { closeMenu(); tts.toggle(); }),
+    iconButton('headphones', 'Hörbuch', () => { closeMenu(); tts.openPlayer(); }),
     iconButton('list', 'Inhalt, Markierungen & Lesezeichen', () => openContents()),
     bmBtn,
   );
@@ -985,7 +986,8 @@ export async function openReader(root, bookId) {
       }, icon(v ? 'moon' : 'close'), label))));
     }
     const voiceBtn = h('button', { class: 'tts-voice grow', 'aria-label': 'Stimme wählen', onClick: () => openVoices() }, icon('speaker'), h('span', { class: 'tts-label' }, 'Vorlesen'));
-    bar.append(voiceBtn, sleepBtn, rateBtn, playBtn, iconButton('stop', 'Vorlesen beenden', () => stop()));
+    const playerBtn = iconButton('headphones', 'Hörbuch-Ansicht', () => openPlayer());
+    bar.append(voiceBtn, sleepBtn, rateBtn, playerBtn, playBtn, iconButton('stop', 'Vorlesen beenden', () => stop()));
     view.append(bar);
     const rateTxt = () => (settings.ttsRate || 1).toLocaleString('de-DE', { minimumFractionDigits: 1 }) + '×';
     rateBtn.textContent = rateTxt();
@@ -1166,6 +1168,7 @@ export async function openReader(root, bookId) {
       if (sleep && sleep.chapter && fi > sleep.fromFi && (flow[fi].block === 'h1' || (flow[fi].block === 'h2' && !toc.some((t) => t.level === 0)))) { sleepNow(); return; }
       cur = { fi, char };
       chunkFi = fi; chunkBase = char;
+      if (chapterAt(fi).start !== sessionChapter) updateSession();
       markSpeaking(fi);
       follow(fi, char);
       recordActivity();
@@ -1192,20 +1195,27 @@ export async function openReader(root, bookId) {
 
     // ---- Eigene Stimme (Piper, läuft auf dem Gerät) ----
     let piperMod = null, piperGen = 0, piperPlay = null, piperTick = null, piperFirst = false;
+    // gemessenes Sprechtempo der eigenen Stimme (Zeichen pro Sekunde) für Restzeiten
+    const piperRate = { c: 0, s: 0, add(chars, sec) { this.c += chars; this.s += sec; if (this.s > 600) { this.c /= 2; this.s /= 2; } }, get() { return this.s > 5 ? this.c / this.s : null; } };
     const piperCache = new Map(); // key → Promise<audio>
     const piperId = () => (settings.ttsVoice || '').slice(6);
-    // Ton auf iOS freigeben – synchron im Tipp-Handler, gleicher AudioContext wie piper.js
+    // Ton auf iOS freigeben – synchron im Tipp-Handler (piper.js nutzt dasselbe <audio>-Element)
     function unlockAudio() {
+      if (piperMod) { piperMod.unlockAudio(); return; }
       try {
         if (navigator.audioSession) navigator.audioSession.type = 'playback';
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return;
-        if (!window.__obAudio) window.__obAudio = new AC();
-        const ac = window.__obAudio;
-        if (ac.state !== 'running') ac.resume().catch(() => {});
-        const b = ac.createBuffer(1, 1, 22050);
-        const src = ac.createBufferSource();
-        src.buffer = b; src.connect(ac.destination); src.start(0);
+        if (!window.__obAudioEl) { const el = document.createElement('audio'); el.preload = 'auto'; el.setAttribute('playsinline', ''); window.__obAudioEl = el; }
+        const el = window.__obAudioEl;
+        if (!el.__unlocked) {
+          // stummes WAV (0,1 s) in der Geste abspielen
+          const n = 2205, dv = new DataView(new ArrayBuffer(44 + n * 2));
+          const str = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
+          str(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+          dv.setUint32(24, 22050, true); dv.setUint32(28, 44100, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); str(36, 'data'); dv.setUint32(40, n * 2, true);
+          el.src = URL.createObjectURL(new Blob([dv.buffer], { type: 'audio/wav' }));
+          const p = el.play();
+          if (p && p.then) p.then(() => { el.__unlocked = true; }).catch(() => {});
+        }
       } catch (e) { /* */ }
     }
     function engineIsPiper() { return /^piper:/.test(settings.ttsVoice || ''); }
@@ -1256,10 +1266,10 @@ export async function openReader(root, bookId) {
       const h0 = piperPlay;
       // Wortgrenzen: gleichmäßig über die Dauer verteilt (die Stimme liefert keine Zeitmarken)
       const words = [...piece.matchAll(/\S+/g)].map((x) => x.index);
-      const ac = m.audioContext();
+      piperRate.add(piece.length, h0.duration);
       piperTick = setInterval(() => {
         if (gen !== piperGen) return;
-        const t = Math.min(1, (ac.currentTime - h0.started) / Math.max(0.1, h0.duration));
+        const t = Math.min(1, h0.position() / Math.max(0.1, h0.duration));
         const ci = Math.floor(t * piece.length);
         let w = 0;
         for (const x of words) { if (x <= ci) w = x; else break; }
@@ -1271,15 +1281,182 @@ export async function openReader(root, bookId) {
       piperPlay = null;
       speakFrom(next);
     }
+    // ---------- Hörbuch: Kapitel, Restzeit, Springen, Sperrbildschirm ----------
+    function chapterAt(fi) {
+      let c = null;
+      for (const t of toc) { if (t.fi <= fi) c = t; else break; }
+      const i = c ? toc.indexOf(c) : -1;
+      const end = toc[i + 1] ? toc[i + 1].fi : flow.length;
+      return { title: c ? c.title : book.title, start: c ? c.fi : 0, end, index: i };
+    }
+    // Zeichen pro Sekunde: gemessen (eigene Stimme) bzw. geschätzt (Gerätestimme)
+    const cps = () => (engineIsPiper() && piperRate.get()) || 14 * (settings.ttsRate || 1);
+    const globalAt = (at) => cum[at.fi] + (at.char || 0);
+    function seekChars(delta) {
+      const at = cur || locate(screen);
+      const g = Math.max(0, Math.min(totalChars - 1, globalAt(at) + delta));
+      const fi = flowIndexAtGlobal(g);
+      const tx = flow[fi].text || '';
+      let ch = Math.max(0, Math.min(tx.length, Math.round(g - cum[fi])));
+      // an den Wortanfang
+      while (ch > 0 && !/\s/.test(tx[ch - 1])) ch--;
+      jumpSpeak({ fi, char: ch });
+    }
+    function jumpSpeak(at) {
+      if (utter) utter.__cancelled = true;
+      stopPiper();
+      if (synth) synth.cancel();
+      cur = at;
+      if (active) speakFrom(at); else { goToFlow(at.fi, at.char); markSpeaking(at.fi); }
+      updateSession();
+    }
+    function chapterJump(dir) {
+      const at = cur || locate(screen);
+      const ch = chapterAt(at.fi);
+      if (dir < 0) {
+        // mehr als ein paar Sekunden im Kapitel → an den Kapitelanfang, sonst ins vorige Kapitel
+        const into = (globalAt(at) - cum[ch.start]) / cps();
+        const target = into > 4 || ch.index <= 0 ? ch.start : toc[ch.index - 1].fi;
+        jumpSpeak({ fi: target, char: 0 });
+      } else if (ch.end < flow.length) jumpSpeak({ fi: ch.end, char: 0 });
+      else toast('Letztes Kapitel');
+    }
+    const fmtDur = (sec) => {
+      const m = Math.round(sec / 60);
+      return sec < 60 ? 'unter 1 Min.' : m < 60 ? `${m} Min.` : `${Math.floor(m / 60)} Std. ${m % 60} Min.`;
+    };
+    function times() {
+      const at = cur || locate(screen);
+      const ch = chapterAt(at.fi);
+      const g = globalAt(at), c0 = cum[ch.start], c1 = cum[ch.end];
+      return { ch, chLeft: Math.max(0, c1 - g) / cps(), bookLeft: Math.max(0, totalChars - g) / cps(), chFrac: c1 > c0 ? (g - c0) / (c1 - c0) : 0, bookFrac: g / totalChars };
+    }
+    // Cover als kleines Bild (für Sperrbildschirm und Player)
+    let coverUrl = null;
+    async function coverImage() {
+      if (coverUrl) return coverUrl;
+      const c = document.createElement('canvas'); c.width = 512; c.height = 512;
+      const x = c.getContext('2d');
+      try {
+        if (book.cover) {
+          const bmp = await createImageBitmap(book.cover);
+          const k = Math.max(512 / bmp.width, 512 / bmp.height);
+          x.fillStyle = '#293244'; x.fillRect(0, 0, 512, 512);
+          const w = bmp.width * 512 / bmp.height;
+          x.drawImage(bmp, (512 - w) / 2, 0, w, 512);
+          void k;
+        } else throw new Error('kein Cover');
+      } catch (e) {
+        x.fillStyle = '#293244'; x.fillRect(0, 0, 512, 512);
+        x.fillStyle = '#F28C28'; x.fillRect(40, 40, 24, 24); x.fillRect(72, 40, 24, 24); x.fillRect(40, 72, 24, 24);
+        x.fillStyle = '#fff'; x.font = '600 44px Montserrat, sans-serif';
+        const words = book.title.split(/\s+/); let line = '', y = 200;
+        for (const w of words) { if (x.measureText(line + w).width > 420 && line) { x.fillText(line, 40, y); y += 56; line = ''; } line += w + ' '; }
+        x.fillText(line, 40, y);
+      }
+      coverUrl = c.toDataURL('image/jpeg', 0.85);
+      return coverUrl;
+    }
+    let sessionChapter = null;
+    async function updateSession() {
+      if (!('mediaSession' in navigator)) return;
+      try {
+        const at = cur || locate(screen);
+        const ch = chapterAt(at.fi);
+        if (sessionChapter !== ch.start) {
+          sessionChapter = ch.start;
+          navigator.mediaSession.metadata = new window.MediaMetadata({
+            title: ch.title === book.title ? book.title : ch.title,
+            artist: book.author || 'Lesepixel',
+            album: book.title,
+            artwork: [{ src: await coverImage(), sizes: '512x512', type: 'image/jpeg' }],
+          });
+        }
+        navigator.mediaSession.playbackState = active ? 'playing' : 'paused';
+      } catch (e) { /* ältere Browser */ }
+    }
+    function initSession() {
+      if (!('mediaSession' in navigator)) return;
+      const set = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch (e) { /* nicht unterstützt */ } };
+      set('play', () => play());
+      set('pause', () => pause());
+      set('stop', () => stop());
+      set('seekbackward', () => seekChars(-30 * cps()));
+      set('seekforward', () => seekChars(30 * cps()));
+      set('previoustrack', () => chapterJump(-1));
+      set('nexttrack', () => chapterJump(1));
+    }
+    function clearSession() {
+      if (!('mediaSession' in navigator)) return;
+      try {
+        navigator.mediaSession.metadata = null;
+        navigator.mediaSession.playbackState = 'none';
+        for (const a of ['play', 'pause', 'stop', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack']) navigator.mediaSession.setActionHandler(a, null);
+      } catch (e) { /* */ }
+      sessionChapter = null;
+    }
+
+    // Großer Hörbuch-Player
+    let player = null, playerTimer = null;
+    function openPlayer() {
+      if (player) return;
+      const img = h('img', { class: 'ap-cover', alt: '' });
+      coverImage().then((u) => { img.src = u; });
+      const chTitle = h('div', { class: 'ap-chapter' });
+      const bar1 = h('div', { class: 'ap-progress' }, h('div', {}));
+      const t1 = h('div', { class: 'ap-times' });
+      const bookBar = h('div', { class: 'ap-progress thin' }, h('div', {}));
+      const t2 = h('div', { class: 'ap-times' });
+      const pp = h('button', { class: 'ap-play', 'aria-label': 'Abspielen/Pause', onClick: () => { unlockAudio(); active ? pause() : play(); refresh(); } });
+      const rate = h('button', { class: 'ap-chip', onClick: () => { cycleRate(); refresh(); } });
+      const refresh = () => {
+        const t = times();
+        chTitle.textContent = t.ch.title;
+        bar1.firstChild.style.width = Math.round(t.chFrac * 100) + '%';
+        t1.textContent = `Noch ${fmtDur(t.chLeft)} im Kapitel`;
+        bookBar.firstChild.style.width = Math.round(t.bookFrac * 100) + '%';
+        t2.textContent = `${Math.round(t.bookFrac * 100)} % · noch ${fmtDur(t.bookLeft)} im Buch`;
+        pp.replaceChildren(icon(active ? 'pause' : 'play'));
+        rate.textContent = rateTxt();
+      };
+      player = h('div', { class: 'audio-player', role: 'dialog', 'aria-label': 'Hörbuch' },
+        h('div', { class: 'ap-top' }, iconButton('close', 'Zurück zum Text', () => closePlayer()), h('span', { class: 'grow' }), h('span', { class: 'muted small' }, 'Hörbuch')),
+        img,
+        h('div', { class: 'ap-title' }, book.title),
+        book.author ? h('div', { class: 'ap-author' }, book.author) : null,
+        chTitle, bar1, t1,
+        h('div', { class: 'ap-controls' },
+          h('button', { class: 'ap-btn', 'aria-label': 'Voriges Kapitel', onClick: () => { chapterJump(-1); setTimeout(refresh, 50); } }, icon('skipBack')),
+          h('button', { class: 'ap-btn', 'aria-label': '30 Sekunden zurück', onClick: () => { seekChars(-30 * cps()); setTimeout(refresh, 50); } }, icon('back30')),
+          pp,
+          h('button', { class: 'ap-btn', 'aria-label': '30 Sekunden vor', onClick: () => { seekChars(30 * cps()); setTimeout(refresh, 50); } }, icon('fwd30')),
+          h('button', { class: 'ap-btn', 'aria-label': 'Nächstes Kapitel', onClick: () => { chapterJump(1); setTimeout(refresh, 50); } }, icon('skipFwd')),
+        ),
+        h('div', { class: 'ap-row' }, rate,
+          h('button', { class: 'ap-chip', onClick: () => openSleep() }, icon('moon'), ' Schlaf-Timer'),
+          h('button', { class: 'ap-chip', onClick: () => openVoices() }, icon('speaker'), ' Stimme')),
+        bookBar, t2,
+      );
+      view.append(player);
+      refresh();
+      playerTimer = setInterval(refresh, 1000);
+    }
+    function closePlayer() {
+      clearInterval(playerTimer);
+      if (player) { player.remove(); player = null; }
+    }
+
     function play() {
       if (!synth && !engineIsPiper()) { toast('Vorlesen wird von diesem Browser nicht unterstützt'); return; }
       if (engineIsPiper()) { piperFirst = true; unlockAudio(); } // muss in der Tipp-Geste passieren (iOS)
+      initSession();
       if (settings.mode !== 'text') { switchModeTo('text', pos?.pageIndex ?? 0); }
       active = true;
       bar.hidden = false;
       voiceLabel();
       playBtn.replaceChildren(icon('pause')); playBtn.setAttribute('aria-label', 'Pause');
       speakFrom(cur || locate(screen));
+      updateSession();
     }
     function pause() {
       active = false;
@@ -1287,6 +1464,7 @@ export async function openReader(root, bookId) {
       stopPiper();
       if (synth) synth.cancel();
       playBtn.replaceChildren(icon('play')); playBtn.setAttribute('aria-label', 'Weiter vorlesen');
+      updateSession();
     }
     function stop() {
       pause();
@@ -1294,9 +1472,12 @@ export async function openReader(root, bookId) {
       bar.hidden = true;
       if (sleep) setSleep(null);
       content.querySelectorAll('.speaking').forEach((e) => e.classList.remove('speaking'));
+      closePlayer();
+      clearSession();
     }
     return {
       toggle() { if (active) pause(); else { cur = null; play(); } },
+      openPlayer() { if (!active) { cur = null; play(); } openPlayer(); },
       stop,
       isActive: () => active,
     };
