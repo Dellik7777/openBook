@@ -28,6 +28,7 @@ import { searchLibrary, setJump } from './search.js';
 import { bookSize, shrinkPhotos, deletePhotos, fmtBytes } from './storage.js';
 import { getStats, dayKey } from './stats.js';
 import { VERSION, BUILD, NOTES, HEADLINE, dateText } from './version.js';
+import { unlockAudio } from './audiounlock.js';
 
 // Lesestatus je Profil: 'want' (will ich lesen), 'reading', 'done' (gelesen)
 export const STATUS = { reading: 'Lese ich', want: 'Will ich lesen', done: 'Gelesen' };
@@ -49,6 +50,7 @@ const routes = [
   [/^#\/scan\/([\w]+)$/, (m) => openScanner(app, m[1])],
   [/^#\/scan\/([\w]+)\/nach\/([\w]+)(?:\/(\d+))?$/, (m) => openScanner(app, m[1], m[2], +(m[3] || 1))],
   [/^#\/read\/([\w]+)$/, (m) => openReader(app, m[1])],
+  [/^#\/read\/([\w]+)\/hoeren$/, (m) => openReader(app, m[1], { listen: true })],
   [/^#\/send\/([\w]+)$/, (m) => openSend(app, m[1])],
   [/^#\/receive$/, () => openReceive(app)],
   [/^#\/rechtliches$/, () => openLegal(app)],
@@ -152,6 +154,7 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
     usageCard(),
     newsCard((await db.getBooks()).length > 0),
     await backupReminder(),
+    !folderId && !tag ? await continueCard(pool) : null,
     goalEl,
     h('div', { class: 'search-wrap' }, icon('search'), searchInput),
     results,
@@ -398,6 +401,41 @@ async function tagEditor(initial) {
   const el = h('div', { class: 'stack-s' }, chips, input, sugg);
   el.value = () => { add(); return tags; };
   return el;
+}
+
+// ---------- Weiterlesen ----------
+
+// Großes aktuelles Buch oben in der Bibliothek: Cover, Fortschritt, Restzeit im Kapitel
+async function continueCard(pool) {
+  const books = await db.getBooks();
+  if (!books.length) return null;
+  const pid = profiles.currentId();
+  let best = null;
+  for (const b of books) {
+    const st = await db.getState(pid, b.id);
+    if (!st || !st.position || !st.lastOpenedAt || st.status === 'done') continue;
+    if (b.enc && !vault.isOpen()) continue;
+    if (!best || st.lastOpenedAt > best.st.lastOpenedAt) best = { b, st };
+  }
+  if (!best) return null;
+  const { b, st } = best;
+  const ratio = Math.min(1, st.position.ratio || 0);
+  const info = st.readInfo || null;
+  const CPM = 1300; // Zeichen pro Minute (ca. 230 Wörter)
+  const fmt = (chars) => { const m = Math.round(chars / CPM); return m < 1 ? 'unter 1 Min.' : m < 60 ? `${m} Min.` : `${Math.floor(m / 60)} Std. ${m % 60} Min.`; };
+  const line = info && info.chapter ? `${info.chapter} · noch ${fmt(info.chapterLeft)} im Kapitel` : info ? `noch ${fmt(info.bookLeft)} im Buch` : '';
+  return h('div', { class: 'continue-card', role: 'group', 'aria-label': 'Weiterlesen' },
+    h('button', { class: 'continue-cover', 'aria-label': 'Weiterlesen: ' + b.title, onClick: () => go('#/read/' + b.id) }, coverEl(b, pool, 'small')),
+    h('div', { class: 'continue-body' },
+      h('div', { class: 'muted small continue-kicker' }, 'Weiterlesen'),
+      h('div', { class: 'continue-title' }, b.title),
+      b.author ? h('div', { class: 'muted small' }, b.author) : null,
+      h('div', { class: 'continue-progress' }, h('div', { style: { width: Math.round(ratio * 100) + '%' } })),
+      h('div', { class: 'muted small' }, `${Math.round(ratio * 100)} %` + (line ? ' · ' + line : '')),
+      h('div', { class: 'row gap-s wrap continue-actions' },
+        h('button', { class: 'btn small primary', onClick: () => go('#/read/' + b.id) }, icon('book'), 'Weiterlesen'),
+        h('button', { class: 'btn small', onClick: () => { unlockAudio({ speech: true }); go('#/read/' + b.id + '/hoeren'); } }, icon('headphones'), 'Anhören')),
+    ));
 }
 
 // ---------- Version ----------

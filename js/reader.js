@@ -9,12 +9,13 @@ import { displayNumbers } from './pagecheck.js';
 import { renderInline, parseBlock, renderTable } from './rich.js';
 import { ensureBookAccess } from './lock.js';
 import { takeJump } from './search.js';
+import { unlockAudio as unlockAudioEl } from './audiounlock.js';
 
 const SECTION_PAGES = 25; // Buchseiten je gerendertem Abschnitt (hält das Layout schnell)
 const CHARS_PER_MIN = 1300; // ca. 230 Wörter/Minute
 
 const DEFAULTS = {
-  fontSize: 19, font: 'literata', lineHeight: 1.55, margin: 'm', align: 'justify', theme: 'paper', mode: 'text', footer: 'page', paraStyle: 'auto',
+  fontSize: 19, font: 'literata', lineHeight: 1.55, margin: 'm', align: 'justify', theme: 'paper', mode: 'text', footer: 'page', paraStyle: 'auto', turn: 'book',
 };
 const FONTS = {
   literata: { label: 'Literata', css: '"Literata", Georgia, "Times New Roman", serif' },
@@ -22,14 +23,14 @@ const FONTS = {
   sans: { label: 'Sans', css: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' },
   dyslexic: { label: 'Weit', css: 'Verdana, "Atkinson Hyperlegible", Tahoma, sans-serif' },
 };
-const THEMES = { white: 'Weiß', paper: 'Papier', sepia: 'Sepia', dark: 'Dunkel', black: 'Schwarz' };
+const THEMES = { white: 'Weiß', paper: 'Papier', book: 'Buch', sepia: 'Sepia', dark: 'Dunkel', black: 'Schwarz' };
 const MARGINS = { s: 16, m: 28, l: 48 };
 
 // Leseeinstellungen gehören zum aktiven Profil (und werden mit ihm synchronisiert)
 function loadSettings() { return { ...DEFAULTS, ...profiles.getSettings() }; }
 function saveSettings(s) { profiles.saveSettings(s); }
 
-export async function openReader(root, bookId) {
+export async function openReader(root, bookId, { listen = false } = {}) {
   let book = await db.getBook(bookId);
   if (!book) { location.hash = '#/'; return; }
   if (!(await ensureBookAccess(book))) { location.hash = '#/'; return; }
@@ -84,7 +85,8 @@ export async function openReader(root, bookId) {
   const ribbon = h('div', { class: 'r-ribbon', hidden: true });
   const footLeft = h('button', { class: 'r-foot-btn', onClick: (e) => { e.stopPropagation(); cycleFooter(); } });
   const footRight = h('span', { class: 'r-foot-pct' });
-  const footer = h('div', { class: 'r-footer' }, footLeft, footRight);
+  const chapBar = h('div', { class: 'r-chapbar', 'aria-hidden': 'true' }, h('div', {}));
+  const footer = h('div', { class: 'r-footer' }, footLeft, footRight, chapBar);
   const header = h('div', { class: 'r-header' }, h('span', {}, book.title));
 
   const slider = h('input', { type: 'range', min: 0, max: 1000, value: 0, class: 'r-slider', 'aria-label': 'Position im Buch' });
@@ -102,6 +104,7 @@ export async function openReader(root, bookId) {
     iconButton('font', 'Schrift & Darstellung', () => openTypography()),
     iconButton('search', 'Im Buch suchen', () => openSearch()),
     iconButton('speaker', 'Vorlesen', () => { closeMenu(); tts.toggle(); }),
+    iconButton('headphones', 'Hörbuch', () => { closeMenu(); tts.openPlayer(); }),
     iconButton('list', 'Inhalt, Markierungen & Lesezeichen', () => openContents()),
     bmBtn,
   );
@@ -272,9 +275,19 @@ export async function openReader(root, bookId) {
 
   let locateTimer = null;
   function showScreen(n, animate = false) {
+    const from = screen;
     screen = Math.max(0, Math.min(screens - 1, n));
-    content.style.transition = animate ? 'transform 180ms ease-out' : 'none';
+    const turn = settings.turn || 'book';
+    if (animate && turn === 'none') animate = false;
+    content.style.transition = animate ? (turn === 'book' ? 'transform 300ms cubic-bezier(.3,.7,.2,1)' : 'transform 180ms ease-out') : 'none';
     content.style.transform = `translateX(${-screen * step}px)`;
+    // „Buch“: Schatten der umgeblätterten Seite wandert über den Bildschirm
+    if (animate && turn === 'book' && screen !== from) {
+      const sh = h('div', { class: 'r-turn ' + (screen > from ? 'fwd' : 'back') });
+      viewport.append(sh);
+      setTimeout(() => sh.remove(), 360);
+    }
+    updateChapterBar();
     // Während der Animation stimmen Bildschirmkoordinaten nicht → danach messen
     clearTimeout(locateTimer);
     if (animate) locateTimer = setTimeout(updatePositionFromScreen, 200);
@@ -444,7 +457,7 @@ export async function openReader(root, bookId) {
     if (!sliderDragging) slider.value = Math.round((pos?.ratio || 0) * 1000);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      if (pos && userMoved) { lastSavedAt = Date.now(); db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now() }); }
+      if (pos && userMoved) { lastSavedAt = Date.now(); db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now(), ...readingInfo() }); }
       // Bis zum Ende gelesen → „Gelesen“
       if (pos && userMoved && (pos.ratio || 0) >= 0.995 && curStatus !== 'done') {
         curStatus = 'done';
@@ -452,6 +465,18 @@ export async function openReader(root, bookId) {
         toast('Ende erreicht – als „Gelesen“ markiert', 3500);
       }
     }, 400);
+  }
+
+  // Für die „Weiterlesen“-Karte in der Bibliothek: Kapitel und Restlänge an der aktuellen Stelle
+  function readingInfo() {
+    if (!pos || !flow.length) return {};
+    const fi = flowIndexFor(pos);
+    const g = cum[fi] + (pos.char || 0);
+    let ch = null;
+    for (const t of toc) { if (t.fi <= fi) ch = t; else break; }
+    const nextH = toc.find((t) => t.fi > fi);
+    const end = nextH ? cum[nextH.fi] : totalChars;
+    return { readInfo: { chapter: ch ? ch.title : null, chapterLeft: Math.max(0, end - g), bookLeft: Math.max(0, totalChars - g), at: Date.now() } };
   }
 
   function restore() {
@@ -464,11 +489,23 @@ export async function openReader(root, bookId) {
     }
   }
 
+  // Dünne Linie unten: Fortschritt im aktuellen Kapitel
+  function updateChapterBar() {
+    if (!pos || !toc.length || settings.mode !== 'text') { chapBar.hidden = true; return; }
+    const fi = flowIndexFor(pos);
+    let a = 0, b = totalChars;
+    for (const t of toc) { if (t.fi <= fi) a = cum[t.fi]; else { b = cum[t.fi]; break; } }
+    const g = cum[fi] + (pos.char || 0);
+    chapBar.hidden = false;
+    chapBar.firstChild.style.width = Math.round(Math.max(0, Math.min(1, (g - a) / Math.max(1, b - a))) * 100) + '%';
+  }
+
   // ---------- Fußzeile ----------
   function updateFooter() {
     if (!pos) return;
     const pct = Math.round((pos.ratio || 0) * 100);
     footRight.textContent = `${pct} %`;
+    updateChapterBar();
     const pi = pos.pageIndex ?? 0;
     const left = (1 - (pos.ratio || 0)) * totalChars / CHARS_PER_MIN;
     const leftTxt = left < 1 ? 'weniger als 1 Min.' : left < 60 ? `${Math.round(left)} Min.` : `${Math.floor(left / 60)} Std. ${Math.round(left % 60)} Min.`;
@@ -567,6 +604,31 @@ export async function openReader(root, bookId) {
             ),
           )) : [h('p', { class: 'muted' }, 'Noch keine Markierungen. Text lange antippen bzw. markieren und eine Farbe wählen.')]),
         );
+      } else if (which === 'names') {
+        list.replaceChildren(h('p', { class: 'muted small' }, 'Suche Namen im Buch …'));
+        import('./names.js').then((m) => m.findNames(flow)).then((names) => {
+          if (!names.length) { list.replaceChildren(h('p', { class: 'muted' }, 'Keine wiederkehrenden Namen gefunden.')); return; }
+          const snip = (hit) => {
+            const tx = flow[hit.i].text || '';
+            const a = Math.max(0, hit.char - 45);
+            const word = (tx.slice(hit.char).match(/^[\p{L}-]+/u) || [''])[0];
+            return h('span', { class: 'name-snip' }, (a ? '…' : '') + tx.slice(a, hit.char), h('mark', {}, word), tx.slice(hit.char + word.length, hit.char + word.length + 45) + '…');
+          };
+          const go = (hit) => { s.close(); userNav(); closeMenu(); if (settings.mode !== 'text') switchModeTo('text', flow[hit.i].pageIndex); goToFlow(hit.i, hit.char); };
+          list.replaceChildren(h('p', { class: 'muted small' }, 'Personen und Orte, die im Buch mehrfach vorkommen – automatisch erkannt. Antippen zeigt alle Stellen.'),
+            ...names.slice(0, 80).map((n) => {
+              const more = h('div', { class: 'name-hits', hidden: true });
+              const item = h('div', { class: 'name-item' },
+                h('button', { class: 'menu-item multi', onClick: () => {
+                  if (!more.childNodes.length) more.append(...n.hits.slice(0, 30).map((hit) => h('button', { class: 'menu-item lookup-hit name-hit', onClick: () => go(hit) }, h('span', {}, h('span', { class: 'muted small name-page' }, pageLabel(flow[hit.i].pageIndex)), snip(hit)))));
+                  more.hidden = !more.hidden;
+                } },
+                h('span', { class: 'grow' }, h('strong', {}, n.name), h('br'), h('span', { class: 'muted small' }, `${n.count}× · zuerst ${pageLabel(flow[n.first.i].pageIndex).replace('Seite ', 'S. ')}`)),
+                h('span', { class: 'name-count' }, String(n.count))),
+                more);
+              return item;
+            }));
+        }).catch((e) => list.replaceChildren(h('p', { class: 'muted' }, 'Namen konnten nicht ermittelt werden: ' + e.message)));
       } else if (which === 'bm') {
         const bms = [...(state.bookmarks || [])].sort((a, b) => globalOf(a) - globalOf(b));
         list.replaceChildren(...(bms.length ? bms.map((b) => h('button', { class: 'menu-item multi', onClick: () => { s.close(); jumpTo(b); } },
@@ -584,6 +646,7 @@ export async function openReader(root, bookId) {
     if (toc.length) tabs.append(h('button', { 'data-t': 'toc', onClick: () => show('toc') }, 'Inhalt'));
     tabs.append(
       h('button', { 'data-t': 'hl', onClick: () => show('hl') }, 'Markiert'),
+      h('button', { 'data-t': 'names', onClick: () => show('names') }, 'Namen'),
       h('button', { 'data-t': 'bm', onClick: () => show('bm') }, 'Lesez.'),
       h('button', { 'data-t': 'pages', onClick: () => show('pages') }, 'Seiten'),
     );
@@ -738,6 +801,7 @@ export async function openReader(root, bookId) {
       h('strong', {}, 'Ränder'), seg('margin', { s: 'Schmal', m: 'Normal', l: 'Breit' }),
       h('strong', {}, 'Ausrichtung'), seg('align', { justify: 'Blocksatz', left: 'Linksbündig' }),
       h('strong', {}, 'Absätze'), seg('paraStyle', { auto: 'Automatisch', indent: 'Einzug', space: 'Abstand' }),
+      h('strong', {}, 'Umblättern'), seg('turn', { book: 'Wie ein Buch', slide: 'Schieben', none: 'Sofort' }),
       h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Zwei Spalten im Querformat'), h('br'), h('span', { class: 'muted small' }, 'Auf dem Tablet wie ein aufgeschlagenes Buch')),
         h('input', { type: 'checkbox', checked: settings.spread !== false, onChange: (e) => { settings.spread = e.target.checked; saveSettings(settings); relayout(); } })),
     ));
@@ -820,6 +884,12 @@ export async function openReader(root, bookId) {
     ...Object.entries(HL_COLORS).map(([c, label]) => h('button', { class: 'hl-dot-btn c-' + c, 'aria-label': 'Markieren: ' + label, onClick: () => createHighlight(c) })),
     h('button', { class: 'hl-bar-btn', onClick: () => createHighlight('yellow', true) }, icon('note'), 'Notiz'),
     h('button', { class: 'hl-bar-btn', onClick: () => { navigator.clipboard && navigator.clipboard.writeText(String(window.getSelection())); toast('Kopiert'); hideHlBar(); } }, 'Kopieren'),
+    h('button', { class: 'hl-bar-btn', 'aria-label': 'Zitat teilen', onClick: async () => {
+      const text = String(window.getSelection()).trim();
+      hideHlBar();
+      if (!text) return;
+      (await import('./quotecard.js')).openQuoteCard({ text, title: book.title, author: book.author });
+    } }, icon('upload'), 'Teilen'),
     h('button', { class: 'hl-bar-btn', 'aria-label': 'Nachschlagen', onClick: async () => {
       const term = String(window.getSelection()).trim();
       hideHlBar();
@@ -856,7 +926,7 @@ export async function openReader(root, bookId) {
       hlBar.hidden = false;
       const bw = hlBar.offsetWidth || 280;
       hlBar.style.left = Math.max(8, Math.min(vr.width - bw - 8, r.left + r.width / 2 - bw / 2 - vr.left)) + 'px';
-      const above = r.top - vr.top - 56;
+      const above = r.top - vr.top - (hlBar.offsetHeight || 48) - 8;
       hlBar.style.top = (above > 40 ? above : r.bottom - vr.top + 12) + 'px';
     }, 200);
   };
@@ -911,6 +981,7 @@ export async function openReader(root, bookId) {
       h('div', { class: 'row gap-s wrap' },
         h('button', { class: 'btn primary', onClick: async () => { await update({ color, note: note.value.trim() }); sh.close(); } }, 'Speichern'),
         h('button', { class: 'btn', onClick: () => { navigator.clipboard && navigator.clipboard.writeText(hl.text + (note.value ? '\n\nNotiz: ' + note.value : '')); toast('Kopiert'); } }, 'Kopieren'),
+        h('button', { class: 'btn', onClick: async () => { sh.close(); (await import('./quotecard.js')).openQuoteCard({ text: hl.text, title: book.title, author: book.author }); } }, icon('upload'), 'Als Bild teilen'),
         h('button', { class: 'btn danger', onClick: async () => { await update({ deleted: true }); sh.close(); toast('Markierung entfernt'); } }, icon('trash'), 'Entfernen'),
       ),
     ));
@@ -985,7 +1056,8 @@ export async function openReader(root, bookId) {
       }, icon(v ? 'moon' : 'close'), label))));
     }
     const voiceBtn = h('button', { class: 'tts-voice grow', 'aria-label': 'Stimme wählen', onClick: () => openVoices() }, icon('speaker'), h('span', { class: 'tts-label' }, 'Vorlesen'));
-    bar.append(voiceBtn, sleepBtn, rateBtn, playBtn, iconButton('stop', 'Vorlesen beenden', () => stop()));
+    const playerBtn = iconButton('headphones', 'Hörbuch-Ansicht', () => openPlayer());
+    bar.append(voiceBtn, sleepBtn, rateBtn, playerBtn, playBtn, iconButton('stop', 'Vorlesen beenden', () => stop()));
     view.append(bar);
     const rateTxt = () => (settings.ttsRate || 1).toLocaleString('de-DE', { minimumFractionDigits: 1 }) + '×';
     rateBtn.textContent = rateTxt();
@@ -1166,6 +1238,7 @@ export async function openReader(root, bookId) {
       if (sleep && sleep.chapter && fi > sleep.fromFi && (flow[fi].block === 'h1' || (flow[fi].block === 'h2' && !toc.some((t) => t.level === 0)))) { sleepNow(); return; }
       cur = { fi, char };
       chunkFi = fi; chunkBase = char;
+      if (chapterAt(fi).start !== sessionChapter) updateSession();
       markSpeaking(fi);
       follow(fi, char);
       recordActivity();
@@ -1192,22 +1265,12 @@ export async function openReader(root, bookId) {
 
     // ---- Eigene Stimme (Piper, läuft auf dem Gerät) ----
     let piperMod = null, piperGen = 0, piperPlay = null, piperTick = null, piperFirst = false;
+    // gemessenes Sprechtempo der eigenen Stimme (Zeichen pro Sekunde) für Restzeiten
+    const piperRate = { c: 0, s: 0, add(chars, sec) { this.c += chars; this.s += sec; if (this.s > 600) { this.c /= 2; this.s /= 2; } }, get() { return this.s > 5 ? this.c / this.s : null; } };
     const piperCache = new Map(); // key → Promise<audio>
     const piperId = () => (settings.ttsVoice || '').slice(6);
-    // Ton auf iOS freigeben – synchron im Tipp-Handler, gleicher AudioContext wie piper.js
-    function unlockAudio() {
-      try {
-        if (navigator.audioSession) navigator.audioSession.type = 'playback';
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return;
-        if (!window.__obAudio) window.__obAudio = new AC();
-        const ac = window.__obAudio;
-        if (ac.state !== 'running') ac.resume().catch(() => {});
-        const b = ac.createBuffer(1, 1, 22050);
-        const src = ac.createBufferSource();
-        src.buffer = b; src.connect(ac.destination); src.start(0);
-      } catch (e) { /* */ }
-    }
+    // Ton auf iOS freigeben – synchron im Tipp-Handler (piper.js nutzt dasselbe <audio>-Element)
+    const unlockAudio = () => unlockAudioEl({ speech: !engineIsPiper() });
     function engineIsPiper() { return /^piper:/.test(settings.ttsVoice || ''); }
     async function piper() { if (!piperMod) piperMod = await import('./piper.js'); return piperMod; }
     function piperAudio(text) {
@@ -1256,10 +1319,10 @@ export async function openReader(root, bookId) {
       const h0 = piperPlay;
       // Wortgrenzen: gleichmäßig über die Dauer verteilt (die Stimme liefert keine Zeitmarken)
       const words = [...piece.matchAll(/\S+/g)].map((x) => x.index);
-      const ac = m.audioContext();
+      piperRate.add(piece.length, h0.duration);
       piperTick = setInterval(() => {
         if (gen !== piperGen) return;
-        const t = Math.min(1, (ac.currentTime - h0.started) / Math.max(0.1, h0.duration));
+        const t = Math.min(1, h0.position() / Math.max(0.1, h0.duration));
         const ci = Math.floor(t * piece.length);
         let w = 0;
         for (const x of words) { if (x <= ci) w = x; else break; }
@@ -1271,15 +1334,182 @@ export async function openReader(root, bookId) {
       piperPlay = null;
       speakFrom(next);
     }
+    // ---------- Hörbuch: Kapitel, Restzeit, Springen, Sperrbildschirm ----------
+    function chapterAt(fi) {
+      let c = null;
+      for (const t of toc) { if (t.fi <= fi) c = t; else break; }
+      const i = c ? toc.indexOf(c) : -1;
+      const end = toc[i + 1] ? toc[i + 1].fi : flow.length;
+      return { title: c ? c.title : book.title, start: c ? c.fi : 0, end, index: i };
+    }
+    // Zeichen pro Sekunde: gemessen (eigene Stimme) bzw. geschätzt (Gerätestimme)
+    const cps = () => (engineIsPiper() && piperRate.get()) || 14 * (settings.ttsRate || 1);
+    const globalAt = (at) => cum[at.fi] + (at.char || 0);
+    function seekChars(delta) {
+      const at = cur || locate(screen);
+      const g = Math.max(0, Math.min(totalChars - 1, globalAt(at) + delta));
+      const fi = flowIndexAtGlobal(g);
+      const tx = flow[fi].text || '';
+      let ch = Math.max(0, Math.min(tx.length, Math.round(g - cum[fi])));
+      // an den Wortanfang
+      while (ch > 0 && !/\s/.test(tx[ch - 1])) ch--;
+      jumpSpeak({ fi, char: ch });
+    }
+    function jumpSpeak(at) {
+      if (utter) utter.__cancelled = true;
+      stopPiper();
+      if (synth) synth.cancel();
+      cur = at;
+      if (active) speakFrom(at); else { goToFlow(at.fi, at.char); markSpeaking(at.fi); }
+      updateSession();
+    }
+    function chapterJump(dir) {
+      const at = cur || locate(screen);
+      const ch = chapterAt(at.fi);
+      if (dir < 0) {
+        // mehr als ein paar Sekunden im Kapitel → an den Kapitelanfang, sonst ins vorige Kapitel
+        const into = (globalAt(at) - cum[ch.start]) / cps();
+        const target = into > 4 || ch.index <= 0 ? ch.start : toc[ch.index - 1].fi;
+        jumpSpeak({ fi: target, char: 0 });
+      } else if (ch.end < flow.length) jumpSpeak({ fi: ch.end, char: 0 });
+      else toast('Letztes Kapitel');
+    }
+    const fmtDur = (sec) => {
+      const m = Math.round(sec / 60);
+      return sec < 60 ? 'unter 1 Min.' : m < 60 ? `${m} Min.` : `${Math.floor(m / 60)} Std. ${m % 60} Min.`;
+    };
+    function times() {
+      const at = cur || locate(screen);
+      const ch = chapterAt(at.fi);
+      const g = globalAt(at), c0 = cum[ch.start], c1 = cum[ch.end];
+      return { ch, chLeft: Math.max(0, c1 - g) / cps(), bookLeft: Math.max(0, totalChars - g) / cps(), chFrac: c1 > c0 ? (g - c0) / (c1 - c0) : 0, bookFrac: g / totalChars };
+    }
+    // Cover als kleines Bild (für Sperrbildschirm und Player)
+    let coverUrl = null;
+    async function coverImage() {
+      if (coverUrl) return coverUrl;
+      const c = document.createElement('canvas'); c.width = 512; c.height = 512;
+      const x = c.getContext('2d');
+      try {
+        if (book.cover) {
+          const bmp = await createImageBitmap(book.cover);
+          const k = Math.max(512 / bmp.width, 512 / bmp.height);
+          x.fillStyle = '#293244'; x.fillRect(0, 0, 512, 512);
+          const w = bmp.width * 512 / bmp.height;
+          x.drawImage(bmp, (512 - w) / 2, 0, w, 512);
+          void k;
+        } else throw new Error('kein Cover');
+      } catch (e) {
+        x.fillStyle = '#293244'; x.fillRect(0, 0, 512, 512);
+        x.fillStyle = '#F28C28'; x.fillRect(40, 40, 24, 24); x.fillRect(72, 40, 24, 24); x.fillRect(40, 72, 24, 24);
+        x.fillStyle = '#fff'; x.font = '600 44px Montserrat, sans-serif';
+        const words = book.title.split(/\s+/); let line = '', y = 200;
+        for (const w of words) { if (x.measureText(line + w).width > 420 && line) { x.fillText(line, 40, y); y += 56; line = ''; } line += w + ' '; }
+        x.fillText(line, 40, y);
+      }
+      coverUrl = c.toDataURL('image/jpeg', 0.85);
+      return coverUrl;
+    }
+    let sessionChapter = null;
+    async function updateSession() {
+      if (!('mediaSession' in navigator)) return;
+      try {
+        const at = cur || locate(screen);
+        const ch = chapterAt(at.fi);
+        if (sessionChapter !== ch.start) {
+          sessionChapter = ch.start;
+          navigator.mediaSession.metadata = new window.MediaMetadata({
+            title: ch.title === book.title ? book.title : ch.title,
+            artist: book.author || 'Lesepixel',
+            album: book.title,
+            artwork: [{ src: await coverImage(), sizes: '512x512', type: 'image/jpeg' }],
+          });
+        }
+        navigator.mediaSession.playbackState = active ? 'playing' : 'paused';
+      } catch (e) { /* ältere Browser */ }
+    }
+    function initSession() {
+      if (!('mediaSession' in navigator)) return;
+      const set = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch (e) { /* nicht unterstützt */ } };
+      set('play', () => play());
+      set('pause', () => pause());
+      set('stop', () => stop());
+      set('seekbackward', () => seekChars(-30 * cps()));
+      set('seekforward', () => seekChars(30 * cps()));
+      set('previoustrack', () => chapterJump(-1));
+      set('nexttrack', () => chapterJump(1));
+    }
+    function clearSession() {
+      if (!('mediaSession' in navigator)) return;
+      try {
+        navigator.mediaSession.metadata = null;
+        navigator.mediaSession.playbackState = 'none';
+        for (const a of ['play', 'pause', 'stop', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack']) navigator.mediaSession.setActionHandler(a, null);
+      } catch (e) { /* */ }
+      sessionChapter = null;
+    }
+
+    // Großer Hörbuch-Player
+    let player = null, playerTimer = null;
+    function openPlayer() {
+      if (player) return;
+      const img = h('img', { class: 'ap-cover', alt: '' });
+      coverImage().then((u) => { img.src = u; });
+      const chTitle = h('div', { class: 'ap-chapter' });
+      const bar1 = h('div', { class: 'ap-progress' }, h('div', {}));
+      const t1 = h('div', { class: 'ap-times' });
+      const bookBar = h('div', { class: 'ap-progress thin' }, h('div', {}));
+      const t2 = h('div', { class: 'ap-times' });
+      const pp = h('button', { class: 'ap-play', 'aria-label': 'Abspielen/Pause', onClick: () => { unlockAudio(); active ? pause() : play(); refresh(); } });
+      const rate = h('button', { class: 'ap-chip', onClick: () => { cycleRate(); refresh(); } });
+      const refresh = () => {
+        const t = times();
+        chTitle.textContent = t.ch.title;
+        bar1.firstChild.style.width = Math.round(t.chFrac * 100) + '%';
+        t1.textContent = `Noch ${fmtDur(t.chLeft)} im Kapitel`;
+        bookBar.firstChild.style.width = Math.round(t.bookFrac * 100) + '%';
+        t2.textContent = `${Math.round(t.bookFrac * 100)} % · noch ${fmtDur(t.bookLeft)} im Buch`;
+        pp.replaceChildren(icon(active ? 'pause' : 'play'));
+        rate.textContent = rateTxt();
+      };
+      player = h('div', { class: 'audio-player', role: 'dialog', 'aria-label': 'Hörbuch' },
+        h('div', { class: 'ap-top' }, iconButton('close', 'Zurück zum Text', () => closePlayer()), h('span', { class: 'grow' }), h('span', { class: 'muted small' }, 'Hörbuch')),
+        img,
+        h('div', { class: 'ap-title' }, book.title),
+        book.author ? h('div', { class: 'ap-author' }, book.author) : null,
+        chTitle, bar1, t1,
+        h('div', { class: 'ap-controls' },
+          h('button', { class: 'ap-btn', 'aria-label': 'Voriges Kapitel', onClick: () => { chapterJump(-1); setTimeout(refresh, 50); } }, icon('skipBack')),
+          h('button', { class: 'ap-btn', 'aria-label': '30 Sekunden zurück', onClick: () => { seekChars(-30 * cps()); setTimeout(refresh, 50); } }, icon('back30')),
+          pp,
+          h('button', { class: 'ap-btn', 'aria-label': '30 Sekunden vor', onClick: () => { seekChars(30 * cps()); setTimeout(refresh, 50); } }, icon('fwd30')),
+          h('button', { class: 'ap-btn', 'aria-label': 'Nächstes Kapitel', onClick: () => { chapterJump(1); setTimeout(refresh, 50); } }, icon('skipFwd')),
+        ),
+        h('div', { class: 'ap-row' }, rate,
+          h('button', { class: 'ap-chip', onClick: () => openSleep() }, icon('moon'), ' Schlaf-Timer'),
+          h('button', { class: 'ap-chip', onClick: () => openVoices() }, icon('speaker'), ' Stimme')),
+        bookBar, t2,
+      );
+      view.append(player);
+      refresh();
+      playerTimer = setInterval(refresh, 1000);
+    }
+    function closePlayer() {
+      clearInterval(playerTimer);
+      if (player) { player.remove(); player = null; }
+    }
+
     function play() {
       if (!synth && !engineIsPiper()) { toast('Vorlesen wird von diesem Browser nicht unterstützt'); return; }
       if (engineIsPiper()) { piperFirst = true; unlockAudio(); } // muss in der Tipp-Geste passieren (iOS)
+      initSession();
       if (settings.mode !== 'text') { switchModeTo('text', pos?.pageIndex ?? 0); }
       active = true;
       bar.hidden = false;
       voiceLabel();
       playBtn.replaceChildren(icon('pause')); playBtn.setAttribute('aria-label', 'Pause');
       speakFrom(cur || locate(screen));
+      updateSession();
     }
     function pause() {
       active = false;
@@ -1287,6 +1517,7 @@ export async function openReader(root, bookId) {
       stopPiper();
       if (synth) synth.cancel();
       playBtn.replaceChildren(icon('play')); playBtn.setAttribute('aria-label', 'Weiter vorlesen');
+      updateSession();
     }
     function stop() {
       pause();
@@ -1294,9 +1525,12 @@ export async function openReader(root, bookId) {
       bar.hidden = true;
       if (sleep) setSleep(null);
       content.querySelectorAll('.speaking').forEach((e) => e.classList.remove('speaking'));
+      closePlayer();
+      clearSession();
     }
     return {
       toggle() { if (active) pause(); else { cur = null; play(); } },
+      openPlayer() { if (!active) { cur = null; play(); } openPlayer(); },
       stop,
       isActive: () => active,
     };
@@ -1523,6 +1757,8 @@ export async function openReader(root, bookId) {
   await loadFigures();
   rebuildFlow();
   restore();
+  // „Anhören“ aus der Bibliothek: gleich den Hörbuch-Player öffnen
+  if (listen) setTimeout(() => tts.openPlayer(), 300);
   // Sprung aus der Suche über alle Bücher
   const jump = takeJump(bookId);
   if (jump && settings.mode === 'text') {

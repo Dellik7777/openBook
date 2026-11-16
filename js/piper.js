@@ -6,6 +6,10 @@
 // Die Sprachmodelle sind groß (ca. 60 MB) und werden nur auf Wunsch einmal von Hugging Face
 // geladen (dabei wird kein Text übertragen) und dann im Speicher der App aufbewahrt.
 
+import { audioElement } from './audiounlock.js';
+
+export { audioElement, unlockAudio } from './audiounlock.js';
+
 const CACHE = 'ob-voices-v1';
 const HOSTS = [
   'https://huggingface.co/rhasspy/piper-voices/resolve/main/',
@@ -124,43 +128,51 @@ export async function synthesize(id, text, { rate = 1 } = {}) {
   return { samples: r.samples, rate: r.rate };
 }
 
-// Wiedergabe über die Web-Audio-API. Auf dem iPhone als „Wiedergabe“ anmelden, damit der
-// Stummschalter nicht stumm schaltet (Safari 17+).
-// Muss direkt in der Tipp-Geste aufgerufen werden (iOS gibt Ton sonst nicht frei);
-// ohne await davor. Teilt sich den AudioContext über window.__obAudio.
-export function unlockAudio() {
-  try {
-    if (navigator.audioSession) navigator.audioSession.type = 'playback';
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return null;
-    if (!window.__obAudio) window.__obAudio = new AC();
-    const ac = window.__obAudio;
-    if (ac.state !== 'running') ac.resume().catch(() => {});
-    // kurzer stiller Ton „entsperrt“ die Wiedergabe auf iOS
-    const b = ac.createBuffer(1, 1, 22050);
-    const src = ac.createBufferSource();
-    src.buffer = b; src.connect(ac.destination); src.start(0);
-    return ac;
-  } catch (e) { return null; }
+// Wiedergabe über ein <audio>-Element (nicht Web Audio): Nur so zeigt iOS die Steuerung auf dem
+// Sperrbildschirm und spielt weiter, wenn das Display ausgeht.
+function wav(samples, rate) {
+  const n = samples.length, dv = new DataView(new ArrayBuffer(44 + n * 2));
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  str(36, 'data'); dv.setUint32(40, n * 2, true);
+  for (let i = 0, o = 44; i < n; i++, o += 2) {
+    const v = Math.max(-1, Math.min(1, samples[i]));
+    dv.setInt16(o, v < 0 ? v * 32768 : v * 32767, true);
+  }
+  return new Blob([dv.buffer], { type: 'audio/wav' });
 }
-export function audioContext() {
-  return window.__obAudio || unlockAudio();
-}
-
-// Spielt Samples ab → { stop(), done: Promise<boolean (true = zu Ende gespielt)>, duration }
+// Spielt Samples ab → { stop(), done: Promise<boolean (true = zu Ende gespielt)>, duration, position() }
 export function play({ samples, rate }) {
-  const ac = audioContext();
-  const buf = ac.createBuffer(1, samples.length, rate);
-  buf.copyToChannel(samples instanceof Float32Array ? samples : Float32Array.from(samples), 0);
-  const src = ac.createBufferSource();
-  src.buffer = buf;
-  src.connect(ac.destination);
+  const el = audioElement();
+  const url = URL.createObjectURL(wav(samples, rate));
   let finish;
   const done = new Promise((r) => { finish = r; });
-  let stopped = false;
-  src.onended = () => finish(!stopped);
-  src.start();
-  return { duration: buf.duration, started: ac.currentTime, stop() { stopped = true; try { src.stop(); } catch (e) { /* */ } finish(false); }, done };
+  let over = false;
+  const end = (ok) => {
+    if (over) return;
+    over = true;
+    el.removeEventListener('ended', onEnded);
+    el.removeEventListener('error', onError);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    finish(ok);
+  };
+  const onEnded = () => end(true);
+  const onError = () => end(true); // nicht hängen bleiben
+  el.addEventListener('ended', onEnded);
+  el.addEventListener('error', onError);
+  el.src = url;
+  el.playbackRate = 1;
+  const p = el.play();
+  if (p && p.catch) p.catch((e) => { console.warn('Wiedergabe', e); end(false); });
+  const duration = samples.length / rate;
+  return {
+    duration,
+    position: () => el.currentTime || 0,
+    stop() { if (!over) { try { el.pause(); } catch (e) { /* */ } end(false); } },
+    done,
+  };
 }
 
-export const supported = () => typeof WebAssembly === 'object' && 'caches' in window && !!(window.AudioContext || window.webkitAudioContext);
+export const supported = () => typeof WebAssembly === 'object' && 'caches' in window && typeof Worker === 'function';

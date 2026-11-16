@@ -36,6 +36,11 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Fußnoten** unten auf der Seite werden erkannt; die hochgestellten Verweise im Text lassen sich antippen
 
 **Lesen wie auf einem E-Book-Reader**
+- **Hörbuch-Modus:** großer Player mit Cover, Kapitel, Restzeit, ±30 Sekunden und Kapitelsprüngen; mit eigenen Stimmen steuerbar vom Sperrbildschirm und mit AirPods
+- **Namen-Register:** Personen und Orte werden automatisch erkannt (ohne KI), mit allen Fundstellen
+- **Weiterlesen-Karte** in der Bibliothek mit Fortschritt und Restzeit im Kapitel
+- **Zitate als Bildkarte teilen** (drei Designs)
+- **Umblättern wie ein Buch**, Farbschema „Buch“ mit Papierstruktur, Fortschrittslinie fürs Kapitel
 - Echter Seitenumbruch statt Scrollen: rechts tippen = weiter, links = zurück, Mitte = Menü, Wischen geht auch
 - Schriftgröße, Schriftart (Literata, Georgia, Sans, Weit), Zeilenabstand, Ränder, Blocksatz mit Silbentrennung
 - Absätze mit Einzug (Roman) oder Abstand (Fachtext), automatisch passend zum Inhalt
