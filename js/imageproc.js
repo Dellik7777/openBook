@@ -1,6 +1,6 @@
 // Bildverarbeitung für Buchseiten: Skalieren, Scan-Filter, Teilen, Drehen, Zuschneiden.
 
-import { detectPage, warpPerspective, flattenCurl, findGutter, trimDarkBorders } from './pagedetect.js';
+import { detectPage, warpPerspective, flattenCurl, findGutter, trimDarkBorders, analyzeFrame } from './pagedetect.js';
 import { dewarpText } from './dewarp.js';
 
 const MAX_EDGE = 2200;   // lange Kante gespeicherter Seiten (gut lesbar + gute OCR)
@@ -148,9 +148,13 @@ export async function makeThumb(src) {
 //   orig/quad: unbearbeitetes Foto (verkleinert) und die verwendeten Ecken (relativ) –
 //   damit lassen sich die Ecken später im Editor frei nachstellen.
 // quad (Option): Ecken von Hand (relativ 0..1) statt automatischer Erkennung
+// split: true | false | 'auto' (Einzel- oder Doppelseite am Bild erkennen)
 export async function processCapture(source, { split = false, scanFilter = true, autoCrop = true, quad = null } = {}) {
   let src = source instanceof Blob ? await loadBitmap(source) : source;
   const { w: W0, h: H0 } = dims(src);
+  if (split === 'auto') {
+    try { split = analyzeFrame(src).spread; } catch (e) { split = false; }
+  }
   let used = null;
   if (quad && !isFullQuad(quad)) used = quad;
   else if (!quad && autoCrop) {

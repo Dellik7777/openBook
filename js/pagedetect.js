@@ -428,3 +428,64 @@ export function trimDarkBorders(src) {
   if (area > 0.97 || area < 0.4) return null;
   return { x: left / w, y: top / h, w: (right - left + 1) / w, h: (bottom - top + 1) / h };
 }
+
+// ---------- Scan 3.0: Bild vor dem Speichern einschätzen ----------
+
+// Punkt im (konvexen) Viereck?
+function inQuad(q, x, y) {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = q[i], b = q[(i + 1) % 4];
+    const z = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+    if (z !== 0) { if (sign && Math.sign(z) !== sign) return false; sign = Math.sign(z); }
+  }
+  return true;
+}
+
+// → { spread: Doppelseite?, cut: Seite angeschnitten?, finger: Finger/Hand auf der Seite?, quad }
+// spread wird über das Seitenverhältnis der erkannten Papierfläche bestimmt
+// (Buchseite hochkant ≈ 0,65; aufgeschlagenes Buch ≈ 1,3).
+export function analyzeFrame(src) {
+  const W = src.videoWidth || src.naturalWidth || src.width;
+  const H = src.videoHeight || src.naturalHeight || src.height;
+  let det = null;
+  try { det = detectPage(src, { spread: true }); } catch (e) { det = null; }
+  let spread, cut = false;
+  if (det) {
+    const [tl, tr, br, bl] = det.quad;
+    const ratio = ((dist(tl, tr) + dist(bl, br)) / 2) / Math.max(1, (dist(tl, bl) + dist(tr, br)) / 2);
+    spread = ratio > 1.0;
+    // Ecke am Bildrand → Seite ragt aus dem Bild
+    const m = 0.012;
+    cut = det.quad.filter(([x, y]) => x < W * m || x > W * (1 - m) || y < H * m || y > H * (1 - m)).length >= 1;
+  } else {
+    spread = W > H * 1.15; // Seite(n) füllen das Bild: Querformat → vermutlich Doppelseite
+  }
+  // Hautfarbe innerhalb der Seite in Randnähe (Finger hält die Seite fest)
+  const S = Math.min(1, 220 / Math.max(W, H));
+  const w = Math.max(8, Math.round(W * S)), h = Math.max(8, Math.round(H * S));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(src, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const q = det ? det.quad.map(([x, y]) => [x * S, y * S]) : [[0, 0], [w, 0], [w, h], [0, h]];
+  const xs = q.map((p) => p[0]), ys = q.map((p) => p[1]);
+  const bx0 = Math.min(...xs), bx1 = Math.max(...xs), by0 = Math.min(...ys), by1 = Math.max(...ys);
+  const band = 0.16;
+  let skin = 0, total = 0;
+  for (let y = Math.max(0, Math.floor(by0)); y < Math.min(h, by1); y++) {
+    for (let x = Math.max(0, Math.floor(bx0)); x < Math.min(w, bx1); x++) {
+      const fx = (x - bx0) / Math.max(1, bx1 - bx0), fy = (y - by0) / Math.max(1, by1 - by0);
+      if (fx > band && fx < 1 - band && fy > band && fy < 1 - band) continue; // nur Randstreifen
+      if (!inQuad(q, x, y)) continue;
+      total++;
+      const i = (y * w + x) * 4, r = d[i], g = d[i + 1], b = d[i + 2];
+      const Y = 0.299 * r + 0.587 * g + 0.114 * b;
+      const cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b;
+      const cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b;
+      if (Y > 50 && cr >= 145 && cr <= 180 && cb >= 77 && cb <= 127 && cr - cb >= 28) skin++;
+    }
+  }
+  const finger = total > 50 && skin / total > 0.025;
+  return { spread, cut, finger, quad: det ? det.quad : null };
+}
