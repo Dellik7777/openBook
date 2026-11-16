@@ -255,10 +255,13 @@ export async function crop(blob, rect) {
 }
 
 // Cover: farbig, etwas kleiner
-export async function processCover(blob) {
+// quad: optional zugeschnittene Ecken (relativ 0..1) → Cover gerade gerückt
+export async function processCover(blob, quad = null) {
   const src = await loadBitmap(blob);
   const { w, h } = dims(src);
-  const c = drawScaled(src, 0, 0, w, h, 900);
+  let c;
+  if (quad && !isFullQuad(quad)) c = warpPerspective(src, quad.map(([x, y]) => [x * w, y * h]), 900);
+  else c = drawScaled(src, 0, 0, w, h, 900);
   return toBlob(c, 'image/jpeg', 0.8);
 }
 

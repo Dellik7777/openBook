@@ -498,3 +498,62 @@ export function analyzeFrame(src) {
   const finger = total > 50 && skin >= 20 && skin / Math.max(1, area) > 0.005;
   return { spread, cut, finger, quad: det ? det.quad : null };
 }
+
+// Gegenstand (z. B. Buchcover) vor einem Hintergrund finden: Farbe des Bildrands = Hintergrund,
+// größte zusammenhängende abweichende Fläche = Gegenstand → { quad } in Bildpunkten oder null
+export function detectObject(src) {
+  const W = src.videoWidth || src.naturalWidth || src.width;
+  const H = src.videoHeight || src.naturalHeight || src.height;
+  const S = Math.min(1, 320 / Math.max(W, H));
+  const w = Math.max(8, Math.round(W * S)), h = Math.max(8, Math.round(H * S));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(src, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  // Hintergrundfarbe: Median der Randpixel
+  const rs = [], gs = [], bs = [];
+  const take = (x, y) => { const i = (y * w + x) * 4; rs.push(d[i]); gs.push(d[i + 1]); bs.push(d[i + 2]); };
+  for (let x = 0; x < w; x += 2) { take(x, 1); take(x, h - 2); }
+  for (let y = 0; y < h; y += 2) { take(1, y); take(w - 2, y); }
+  const med = (a) => a.sort((p, q) => p - q)[a.length >> 1];
+  const br = med(rs), bg = med(gs), bb = med(bs);
+  // Streuung des Hintergrunds → Schwelle
+  const devs = [];
+  for (let k = 0; k < rs.length; k++) devs.push(Math.hypot(rs[k] - br, gs[k] - bg, bs[k] - bb));
+  const thr = Math.max(40, med(devs) * 3 + 20);
+  const mask = new Uint8Array(w * h);
+  for (let i = 0, j = 0; j < mask.length; i += 4, j++) mask[j] = Math.hypot(d[i] - br, d[i + 1] - bg, d[i + 2] - bb) > thr ? 1 : 0;
+  // größte zusammenhängende Fläche
+  const lab = new Int32Array(w * h);
+  let best = 0, bestN = 0, id = 0;
+  const stack = [];
+  for (let p0 = 0; p0 < mask.length; p0++) {
+    if (!mask[p0] || lab[p0]) continue;
+    id++; let n = 0; stack.push(p0); lab[p0] = id;
+    while (stack.length) {
+      const p = stack.pop(); n++;
+      const x = p % w, y = (p / w) | 0;
+      if (x > 0 && mask[p - 1] && !lab[p - 1]) { lab[p - 1] = id; stack.push(p - 1); }
+      if (x < w - 1 && mask[p + 1] && !lab[p + 1]) { lab[p + 1] = id; stack.push(p + 1); }
+      if (y > 0 && mask[p - w] && !lab[p - w]) { lab[p - w] = id; stack.push(p - w); }
+      if (y < h - 1 && mask[p + w] && !lab[p + w]) { lab[p + w] = id; stack.push(p + w); }
+    }
+    if (n > bestN) { bestN = n; best = id; }
+  }
+  if (bestN < w * h * 0.08) return null;
+  // Löcher im Gegenstand (Schrift in Hintergrundfarbe) stören die Ecken nicht: Extrempunkte
+  let tl, tr, brp, bl, mTL = Infinity, mTR = -Infinity, mBR = -Infinity, mBL = Infinity;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (lab[y * w + x] !== best) continue;
+    const s = x + y, df = x - y;
+    if (s < mTL) { mTL = s; tl = [x, y]; }
+    if (s > mBR) { mBR = s; brp = [x, y]; }
+    if (df > mTR) { mTR = df; tr = [x, y]; }
+    if (df < mBL) { mBL = df; bl = [x, y]; }
+  }
+  const q = [tl, tr, brp, bl];
+  if (!convex(q) || polyArea(q) < bestN * 0.8) return null;
+  // Füllt der Gegenstand fast das ganze Bild, gibt es nichts zuzuschneiden
+  if (polyArea(q) > w * h * 0.97) return null;
+  return { quad: q.map(([x, y]) => [x / S, y / S]) };
+}

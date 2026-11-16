@@ -2,7 +2,7 @@
 // App-Dateien: zuerst aus dem Cache, im Hintergrund aktualisieren.
 // OCR-Engine & Sprachdaten (groß, ändern sich nie): Cache zuerst.
 
-const VERSION = 'v30'; // zusammen mit BUILD in js/version.js anpassen
+const VERSION = 'v31'; // zusammen mit BUILD in js/version.js anpassen
 const SHELL = `openbook-shell-${VERSION}`;
 const VENDOR = 'openbook-vendor-v1';
 
