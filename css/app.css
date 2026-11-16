@@ -863,3 +863,9 @@ html.locked #app { visibility: hidden; }
 .finish-big { width: 84px; height: 84px; margin: 0 auto 6px; border-radius: 50%; background: #208c50; color: #fff; display: grid; place-items: center; font: 700 44px var(--font-ui); box-shadow: 0 10px 30px rgba(32,140,80,.35); }
 .finish-hero h3 { margin: 4px 0; font: 700 20px var(--font-ui); }
 .finish-actions { margin-top: 6px; }
+
+/* Cover in der Buchansicht antippbar */
+.cover-edit-btn { position: relative; padding: 0; border: 0; background: none; cursor: pointer; flex: none; }
+.cover-edit-badge { position: absolute; right: 6px; bottom: 6px; display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 12px; background: rgba(29,36,51,.82); color: #fff; font: 600 11px var(--font-ui); }
+.cover-edit-badge .icon { width: 13px; height: 13px; }
+.pages-grid > p { grid-column: 1 / -1; }
