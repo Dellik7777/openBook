@@ -6,6 +6,10 @@
 // Die Sprachmodelle sind groß (ca. 60 MB) und werden nur auf Wunsch einmal von Hugging Face
 // geladen (dabei wird kein Text übertragen) und dann im Speicher der App aufbewahrt.
 
+import { audioElement } from './audiounlock.js';
+
+export { audioElement, unlockAudio } from './audiounlock.js';
+
 const CACHE = 'ob-voices-v1';
 const HOSTS = [
   'https://huggingface.co/rhasspy/piper-voices/resolve/main/',
@@ -124,8 +128,6 @@ export async function synthesize(id, text, { rate = 1 } = {}) {
   return { samples: r.samples, rate: r.rate };
 }
 
-// Wiedergabe über die Web-Audio-API. Auf dem iPhone als „Wiedergabe“ anmelden, damit der
-// Stummschalter nicht stumm schaltet (Safari 17+).
 // Wiedergabe über ein <audio>-Element (nicht Web Audio): Nur so zeigt iOS die Steuerung auf dem
 // Sperrbildschirm und spielt weiter, wenn das Display ausgeht.
 function wav(samples, rate) {
@@ -141,34 +143,6 @@ function wav(samples, rate) {
   }
   return new Blob([dv.buffer], { type: 'audio/wav' });
 }
-const SILENCE = () => URL.createObjectURL(wav(new Float32Array(2205), 22050));
-
-export function audioElement() {
-  if (!window.__obAudioEl) {
-    const el = document.createElement('audio');
-    el.preload = 'auto';
-    el.setAttribute('playsinline', '');
-    window.__obAudioEl = el;
-  }
-  return window.__obAudioEl;
-}
-
-// Muss direkt in der Tipp-Geste aufgerufen werden (iOS gibt Ton sonst nicht frei); ohne await davor.
-export function unlockAudio() {
-  try {
-    if (navigator.audioSession) navigator.audioSession.type = 'playback';
-    const el = audioElement();
-    if (!el.__unlocked) {
-      const u = SILENCE();
-      el.src = u;
-      const p = el.play();
-      if (p && p.then) p.then(() => { el.__unlocked = true; }).catch(() => {});
-      setTimeout(() => URL.revokeObjectURL(u), 2000);
-    }
-    return el;
-  } catch (e) { return null; }
-}
-
 // Spielt Samples ab → { stop(), done: Promise<boolean (true = zu Ende gespielt)>, duration, position() }
 export function play({ samples, rate }) {
   const el = audioElement();

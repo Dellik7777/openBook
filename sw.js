@@ -49,6 +49,7 @@ const SHELL_FILES = [
   'js/dewarp.js',
   'js/corners.js',
   'js/piper.js',
+  'js/audiounlock.js',
   'js/piper-worker.js',
   'js/proofread.js',
   'js/proofview.js',

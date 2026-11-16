@@ -807,3 +807,16 @@ html.locked #app { visibility: hidden; }
 .name-snip mark { background: rgba(242, 140, 40, .3); color: inherit; padding: 0 2px; border-radius: 2px; }
 .name-item > .menu-item { width: 100%; }
 .name-hit .name-page { display: block; font-family: var(--font-ui); }
+
+/* Weiterlesen-Karte */
+.continue-card { display: flex; gap: 16px; align-items: stretch; margin: 4px 0 14px; padding: 14px; border-radius: 10px; background: linear-gradient(135deg, #293244, #1d2433); color: #fff; box-shadow: 0 10px 28px rgba(41,50,68,.25); }
+.continue-cover { flex: none; width: 92px; padding: 0; border: 0; background: none; cursor: pointer; }
+.continue-cover .cover { width: 92px; height: 132px; border-radius: 4px; box-shadow: 0 6px 16px rgba(0,0,0,.35); }
+.continue-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.continue-card .muted { color: rgba(255,255,255,.72); }
+.continue-kicker { text-transform: uppercase; letter-spacing: .08em; font-weight: 600; color: #F28C28 !important; }
+.continue-title { font: 700 18px var(--font-ui); line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.continue-progress { height: 5px; border-radius: 3px; background: rgba(255,255,255,.18); overflow: hidden; margin: 6px 0 2px; }
+.continue-progress > div { height: 100%; background: #F28C28; border-radius: 3px; }
+.continue-actions { margin-top: auto; padding-top: 6px; }
+.continue-actions .btn:not(.primary) { background: rgba(255,255,255,.1); color: #fff; border-color: rgba(255,255,255,.25); }

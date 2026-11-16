@@ -9,6 +9,7 @@ import { displayNumbers } from './pagecheck.js';
 import { renderInline, parseBlock, renderTable } from './rich.js';
 import { ensureBookAccess } from './lock.js';
 import { takeJump } from './search.js';
+import { unlockAudio as unlockAudioEl } from './audiounlock.js';
 
 const SECTION_PAGES = 25; // Buchseiten je gerendertem Abschnitt (hält das Layout schnell)
 const CHARS_PER_MIN = 1300; // ca. 230 Wörter/Minute
@@ -29,7 +30,7 @@ const MARGINS = { s: 16, m: 28, l: 48 };
 function loadSettings() { return { ...DEFAULTS, ...profiles.getSettings() }; }
 function saveSettings(s) { profiles.saveSettings(s); }
 
-export async function openReader(root, bookId) {
+export async function openReader(root, bookId, { listen = false } = {}) {
   let book = await db.getBook(bookId);
   if (!book) { location.hash = '#/'; return; }
   if (!(await ensureBookAccess(book))) { location.hash = '#/'; return; }
@@ -445,7 +446,7 @@ export async function openReader(root, bookId) {
     if (!sliderDragging) slider.value = Math.round((pos?.ratio || 0) * 1000);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      if (pos && userMoved) { lastSavedAt = Date.now(); db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now() }); }
+      if (pos && userMoved) { lastSavedAt = Date.now(); db.updateState(profileId, bookId, { position: pos, lastOpenedAt: Date.now(), ...readingInfo() }); }
       // Bis zum Ende gelesen → „Gelesen“
       if (pos && userMoved && (pos.ratio || 0) >= 0.995 && curStatus !== 'done') {
         curStatus = 'done';
@@ -453,6 +454,18 @@ export async function openReader(root, bookId) {
         toast('Ende erreicht – als „Gelesen“ markiert', 3500);
       }
     }, 400);
+  }
+
+  // Für die „Weiterlesen“-Karte in der Bibliothek: Kapitel und Restlänge an der aktuellen Stelle
+  function readingInfo() {
+    if (!pos || !flow.length) return {};
+    const fi = flowIndexFor(pos);
+    const g = cum[fi] + (pos.char || 0);
+    let ch = null;
+    for (const t of toc) { if (t.fi <= fi) ch = t; else break; }
+    const nextH = toc.find((t) => t.fi > fi);
+    const end = nextH ? cum[nextH.fi] : totalChars;
+    return { readInfo: { chapter: ch ? ch.title : null, chapterLeft: Math.max(0, end - g), bookLeft: Math.max(0, totalChars - g), at: Date.now() } };
   }
 
   function restore() {
@@ -1226,24 +1239,7 @@ export async function openReader(root, bookId) {
     const piperCache = new Map(); // key → Promise<audio>
     const piperId = () => (settings.ttsVoice || '').slice(6);
     // Ton auf iOS freigeben – synchron im Tipp-Handler (piper.js nutzt dasselbe <audio>-Element)
-    function unlockAudio() {
-      if (piperMod) { piperMod.unlockAudio(); return; }
-      try {
-        if (navigator.audioSession) navigator.audioSession.type = 'playback';
-        if (!window.__obAudioEl) { const el = document.createElement('audio'); el.preload = 'auto'; el.setAttribute('playsinline', ''); window.__obAudioEl = el; }
-        const el = window.__obAudioEl;
-        if (!el.__unlocked) {
-          // stummes WAV (0,1 s) in der Geste abspielen
-          const n = 2205, dv = new DataView(new ArrayBuffer(44 + n * 2));
-          const str = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
-          str(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
-          dv.setUint32(24, 22050, true); dv.setUint32(28, 44100, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); str(36, 'data'); dv.setUint32(40, n * 2, true);
-          el.src = URL.createObjectURL(new Blob([dv.buffer], { type: 'audio/wav' }));
-          const p = el.play();
-          if (p && p.then) p.then(() => { el.__unlocked = true; }).catch(() => {});
-        }
-      } catch (e) { /* */ }
-    }
+    const unlockAudio = () => unlockAudioEl({ speech: !engineIsPiper() });
     function engineIsPiper() { return /^piper:/.test(settings.ttsVoice || ''); }
     async function piper() { if (!piperMod) piperMod = await import('./piper.js'); return piperMod; }
     function piperAudio(text) {
@@ -1730,6 +1726,8 @@ export async function openReader(root, bookId) {
   await loadFigures();
   rebuildFlow();
   restore();
+  // „Anhören“ aus der Bibliothek: gleich den Hörbuch-Player öffnen
+  if (listen) setTimeout(() => tts.openPlayer(), 300);
   // Sprung aus der Suche über alle Bücher
   const jump = takeJump(bookId);
   if (jump && settings.mode === 'text') {
