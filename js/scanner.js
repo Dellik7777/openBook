@@ -269,7 +269,7 @@ export async function openScanner(root, bookId, afterPageId = null, insertCount 
     clearInterval(autoTimer);
     prevProbe = null; refProbe = null; diffs = []; stillSince = 0; blurSince = 0; autoState = 'settle';
     if (on) {
-      toast('Blättermodus: Buch ruhig halten und einfach umblättern – Lesepixel fotografiert jede neue Seite selbst', 4000);
+      toast('Blättermodus: Handy ruhig halten und einfach umblättern – jede neue Seite wird selbst fotografiert. Doppelseiten am besten quer halten.', 5000);
       autoTimer = setInterval(autoTick, 150);
     }
     showAuto();

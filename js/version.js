@@ -1,13 +1,20 @@
 // Versionsnummer der App (bei jeder Veröffentlichung anpassen, zusammen mit VERSION in sw.js)
-export const VERSION = '2.1';
-export const BUILD = 'v21';
+export const VERSION = '3.0';
+export const BUILD = 'v30';
 export const DATE = '2026-11-17';
 
 // Kurzfassung für den Hinweis nach einem Update
-export const HEADLINE = 'Hörbuch-Modus mit Sperrbildschirm-Steuerung · Namen-Register · Weiterlesen-Karte · Zitate als Bild teilen · Umblättern wie ein Buch';
+export const HEADLINE = 'Scan 3.0: einfach umblättern – Lesepixel fotografiert, prüft und meldet „S. 45 ✓“. Mit Fertig-Prüfung am Ende.';
 
 // „Was ist neu“ – neueste Version zuerst
 export const NOTES = [
+  ['3.0', [
+    'Blättermodus: Handy ruhig halten und einfach umblättern – jede neue Seite wird automatisch fotografiert',
+    'Einzel- und Doppelseiten werden automatisch erkannt und geteilt',
+    'Live-Rückmeldung mit Ton und Vibration: „S. 45 ✓“ nach jeder erkannten Seite',
+    'Doppelt fotografierte Seiten werden automatisch verworfen; Hinweise bei Finger im Bild und angeschnittener Seite',
+    'Fertig-Prüfung nach dem Scannen: fehlende Seiten (direkt nachscannen), Dubletten, Reihenfolge, Fotoqualität und Textprüfung – oder „Alles vollständig“',
+  ]],
   ['2.1', [
     'Hörbuch-Modus: großer Player mit Cover, Kapitel, Restzeit, ±30 Sekunden und Kapitelsprüngen – steuerbar vom Sperrbildschirm und mit AirPods (eigene Stimmen)',
     'Namen-Register: Personen und Orte im Buch werden automatisch erkannt, mit allen Fundstellen (Inhalt → Namen)',
