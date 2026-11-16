@@ -90,6 +90,7 @@ export async function openLegal(root) {
           ['qrcode-generator (QR-Codes erzeugen)', 'MIT'],
           ['jsQR (QR-Codes lesen)', 'Apache License 2.0'],
           ['PDF.js (PDF-Import)', 'Apache License 2.0'],
+          ['Deutsche Wortliste (Textprüfung, aus Tesseract langdata_lstm)', 'Apache License 2.0'],
           ['ONNX Runtime Web (eigene Stimmen)', 'MIT'],
           ['piper-phonemize / piper-wasm (Lautschrift für eigene Stimmen)', 'MIT'],
           ['eSpeak NG (Lautschrift, enthalten in piper-wasm)', 'GPL-3.0 – Quelltext: github.com/rhasspy/espeak-ng'],

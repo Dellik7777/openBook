@@ -27,6 +27,7 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Initialen** (großer Anfangsbuchstabe am Kapitelanfang) werden erkannt und vor das Wort gesetzt
 - Läuft im Hintergrund weiter, während du scannst; wird nach einem Neustart fortgesetzt
 - Repariert Silbentrennung am Zeilenende (auch wenn die Hälften unterschiedlich formatiert erkannt wurden), entfernt Seitenzahlen und Kolumnentitel und verbindet Absätze über Seitengrenzen
+- **Textprüfung fürs ganze Buch:** vergleicht jedes Wort mit dem Rest des Buchs und einer deutschen Wortliste. Eindeutige Lesefehler („Lindqyist“, wenn sonst überall „Lindqvist“ steht) werden automatisch korrigiert (rückgängig machbar), zweifelhafte Wörter erscheinen in einer Prüfliste mit Foto-Ausschnitt – statt jede Seite nachzulesen
 - **Satzzeichen-Korrektur:** als Komma gelesene Punkte (Absatzende, vor „Die“, „Er“ …), abgetrennte oder falsche Anführungszeichen (»…« einheitlich), Störzeichen von Papierfasern
 - **Lokaler Schwellwert (Sauvola)** statt eines Werts für die ganze Seite; Schattenkeile am Bund werden vor der Erkennung entfernt. Kleine, allein stehende Seitenzahlen werden notfalls in einem zweiten Durchgang unter/über dem Text gesucht
 - **Erhält die Formatierung:** Überschriften, Aufzählungen mit Ebenen, nummerierte Listen, **fett** und *kursiv* (eigene Bildanalyse von Strichstärke und Schräglage)

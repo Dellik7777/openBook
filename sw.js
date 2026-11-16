@@ -49,6 +49,8 @@ const SHELL_FILES = [
   'js/dewarp.js',
   'js/corners.js',
   'js/piper.js',
+  'js/proofread.js',
+  'js/proofview.js',
   'js/config.js',
   'js/sync/sync.js',
   'js/sync/oauth.js',
@@ -73,6 +75,7 @@ const VENDOR_FILES = [
   'vendor/jszip/jszip.min.js',
   'vendor/qr/qrcode.js',
   'vendor/qr/jsQR.js',
+  'vendor/wordlist/deu.txt',
 ];
 
 self.addEventListener('install', (e) => {

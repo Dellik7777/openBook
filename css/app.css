@@ -765,3 +765,13 @@ html.locked #app { visibility: hidden; }
 .ce-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; padding: 8px 12px calc(12px + env(safe-area-inset-bottom)); }
 .ce-actions .btn { min-height: 44px; }
 .corner-editor .btn:not(.primary) { background: #273041; color: #fff; border-color: #3B4760; }
+
+/* Textprüfung */
+.proof-body { padding: 16px; max-width: 720px; margin: 0 auto; }
+.proof-item { display: flex; flex-direction: column; gap: 8px; }
+.proof-word { font-size: 18px; }
+.proof-crop { max-width: 100%; height: auto; border-radius: 4px; border: 1px solid var(--line); background: #fff; }
+.proof-context { margin: 0; font-family: var(--font-read, Literata, Georgia, serif); line-height: 1.5; }
+.proof-context mark { background: rgba(242, 140, 40, .3); color: inherit; padding: 0 2px; border-radius: 2px; }
+.proof-auto strong { display: flex; align-items: center; gap: 6px; }
+.proof-fixed { margin: 6px 0; word-break: break-word; }
