@@ -8,6 +8,10 @@ const TERMINAL = /[.!?…:;"“”„»«'’)\]]$/;
 // Eine Zeile an die bisherige Absatz-Zeichenkette anhängen, mit Silbentrennungs-Reparatur.
 function joinLine(acc, line) {
   if (!acc) return line;
+  // „*Besonde-*“ + „*res …“ (Auszeichnung um die Trennstelle)
+  const m = acc.match(/(\p{L})[-\u00AD¬](\*{1,3})$/u);
+  if (m && new RegExp('^\\' + m[2].split('').join('\\') + '[a-zäöüß]').test(line)) return acc.slice(0, -(m[2].length + 1)) + line.slice(m[2].length);
+  if (m && /^[a-zäöüß]/.test(line)) return acc.slice(0, -(m[2].length + 1)) + m[2] + line;
   if (HYPHENS.test(acc) && /^[a-zäöüß]/.test(line)) {
     // "Ver-" + "ständnis" → "Verständnis"
     return acc.replace(HYPHENS, '') + line;
@@ -17,6 +21,84 @@ function joinLine(acc, line) {
     return acc.replace(/[­¬]$/, '-') + line;
   }
   return acc + ' ' + line;
+}
+
+// Wörter zweier Zeilen verbinden; ein am Zeilenende getrenntes Wort wird wieder zusammengesetzt
+// (auch wenn Fett/Kursiv der beiden Hälften unterschiedlich erkannt wurde).
+const HYPH_END = /[\p{L}][-\u00AD\u2010\u2011¬–—]$/u;
+function joinWords(acc, ws) {
+  if (!acc.length) return ws.slice();
+  if (!ws.length) return acc;
+  const a = acc[acc.length - 1], b = ws[0];
+  if (HYPH_END.test(a.text)) {
+    const lower = /^[a-zäöüß]/.test(b.text);
+    if (lower || /[\u00AD¬]$/.test(a.text) || /^\p{Lu}/u.test(b.text)) {
+      // „Ver-“ + „ständnis“ → „Verständnis“; „Nord-“ + „Süd“ → „Nord-Süd“
+      const head = lower ? a.text.slice(0, -1) : a.text.slice(0, -1) + '-';
+      const main = a.text.length >= b.text.length ? a : b;
+      const merged = { ...b, text: head + b.text, bold: main.bold, italic: main.italic, conf: Math.min(a.conf ?? 90, b.conf ?? 90), bbox: a.bbox };
+      return [...acc.slice(0, -1), merged, ...ws.slice(1)];
+    }
+  }
+  return acc.concat(ws);
+}
+
+// Häufige Lesefehler bei Satzzeichen korrigieren (Punkt als Komma gelesen usw.)
+// Großgeschriebene Wörter, die nach einem Komma praktisch nie stehen → dort war ein Punkt
+const STARTERS = new Set(('Der Die Das Den Dem Des Ein Eine Einen Einem Einer Er Es Ich Wir Du Dann Doch Aber Also Auch '
+  + 'Nun Da Dort Man Mit Im In Am An Auf Als Wenn Wie Was Wer Wo Warum Nach Vor Bei Seit Noch Nur So Schon Jetzt Heute '
+  + 'Erst Dabei Danach Damit Deshalb Trotzdem Zum Zur Kein Keine Mein Meine Sein Seine Dieser Diese Dieses Jeder Jede '
+  + 'Niemand Nichts Alles Immer Vielleicht Plötzlich Irgendwo Irgendwann Gegen Unter Über Hinter Neben Während '
+  + 'Und Oder Bis Hier Dies Zwei Drei Vier Fünf Kurz Später Langsam Endlich Zuerst Sofort Ja Nein').split(' '));
+function fixPunctuation(words, ends, quotes = null) {
+  // Störzeichen (Papierfasern, Staub) als einzelnes Satzzeichen oder doppeltes Satzzeichen
+  for (let i = words.length - 1; i >= 0; i--) {
+    if (/^[‚,'`´.;:]+$/.test(words[i].text) && (words[i].conf ?? 90) < 75 && words.length > 1) words.splice(i, 1);
+  }
+  const single = words.some((w) => /[‘']/.test(w.text));
+  for (const w of words) {
+    w.text = w.text.replace(/([\p{L}\d][.!?:])[,;]+$/u, '$1');
+    if (!single) w.text = w.text.replace(/^‚(?=\p{Ll})/u, '');
+  }
+  if (quotes) fixQuotes(words, ends, quotes);
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    // Komma direkt vor schließendem Anführungszeichen gibt es nicht: »Ich komme,« → »Ich komme.«
+    w.text = w.text.replace(/(\p{L}),([«“”"])/u, '$1.$2');
+    const next = words[i + 1];
+    if (!/[\p{L}\d][,]$/u.test(w.text)) continue;
+    const nt = next ? next.text.replace(/^[»«„“"]/, '') : '';
+    if ((!next && ends) || (next && STARTERS.has(nt.replace(/[.,;:!?«»]+$/, '')))) w.text = w.text.slice(0, -1) + '.';
+  }
+}
+
+// Anführungszeichen: Stil der Seite (»…« oder «…») bestimmen
+function quoteStyle(lines) {
+  let de = 0, ch = 0;
+  for (const l of lines) for (const w of l.words) {
+    if (/^»/.test(w.text) || /«[.,;:!?]*$/.test(w.text)) de++;
+    if (/^«/.test(w.text) || /»[.,;:!?]*$/.test(w.text)) ch++;
+  }
+  if (!de && !ch) return null;
+  return de >= ch ? { open: '»', close: '«' } : { open: '«', close: '»' };
+}
+// Abgetrennte oder falsch gelesene Anführungszeichen reparieren, fehlendes Schlusszeichen ergänzen
+function fixQuotes(words, ends, q) {
+  const esc = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lone = new RegExp(`^${esc(q.close)}[.,;:!?…]*$`);
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    // „Wort“ / “Wort” / "Wort" in einem Buch mit »…« → »Wort«
+    w.text = w.text.replace(/^[„“"](?=\p{L})/u, q.open).replace(/(\p{L}[.,;:!?…]?)[“”"]([.,;:!?…]*)$/u, `$1${q.close}$2`);
+    if (i > 0 && lone.test(w.text)) { words[i - 1].text += w.text; words.splice(i, 1); i--; continue; }
+    if (w.text === q.open && words[i + 1]) { words[i + 1].text = q.open + words[i + 1].text; words.splice(i, 1); i--; }
+  }
+  if (ends && words.length && words[0].text.startsWith(q.open)) {
+    const all = words.map((w) => w.text).join(' ');
+    const opens = all.split(q.open).length - 1, closes = all.split(q.close).length - 1;
+    const last = words[words.length - 1];
+    if (opens > closes && /[.!?…]$/.test(last.text)) last.text += q.close;
+  }
 }
 
 function cleanLine(s) {
@@ -115,7 +197,8 @@ export function analyzeOcr(data, { height = 0 } = {}) {
     return { paras: [], paraY: [], printedNo: pn ? pn.n : null };
   }
 
-  const blocks = (body.length ? buildBlocks(body) : []).concat(tables.blocks, fns.notes.map((n) => ({
+  const quotes = quoteStyle(body);
+  const blocks = (body.length ? buildBlocks(body, quotes) : []).concat(tables.blocks, fns.notes.map((n) => ({
     type: 'fn', label: n.label, md: styledWords(n.words), y: n.y, conf: 90, nLines: n.nLines,
   }))).sort((a, b) => a.y - b.y);
   const paras = [];
@@ -126,7 +209,7 @@ export function analyzeOcr(data, { height = 0 } = {}) {
     if (b.conf < 35 && plain.length < 25) continue; // Bildrauschen, Fussel
     paras.push({ ...b, y: b.y / H });
   }
-  const merged = mergeBroken(paras);
+  const merged = mergeBroken(paras, quotes);
   return {
     paras: merged.map(blockToMd),
     paraY: merged.map((p) => Math.round(p.y * 1000) / 1000),
@@ -355,7 +438,7 @@ function median(arr) {
   return a.length ? a[Math.floor(a.length / 2)] : 0;
 }
 
-function buildBlocks(lines) {
+function buildBlocks(lines, quotes = null) {
   const lineH = median(lines.map((l) => l.y1 - l.y0)) || 20;
   const wordH = median(lines.map((l) => l.wordH)) || lineH;
   const left = Math.min(...lines.map((l) => l.x0));
@@ -393,29 +476,35 @@ function buildBlocks(lines) {
   for (const l of lines) {
     const gap = prev ? l.y0 - prev.y1 : 0;
     const words = l.bullet ? l.words.slice(l.bullet.skip) : l.words;
-    const md = styledWords(words);
     const conf = l.words.reduce((s, w) => s + (w.conf ?? 90), 0) / l.words.length;
     const allBold = words.every((w) => w.bold);
     if (l.bullet) {
       push();
-      cur = { type: 'li', level: levelOf(l.bullet.x), ordered: l.bullet.ordered, mdParts: [md], textX: l.bullet.textX, y: l.y0, conf, nLines: 1, bold: allBold, h: l.wordH };
+      cur = { type: 'li', level: levelOf(l.bullet.x), ordered: l.bullet.ordered, words: words.slice(), textX: l.bullet.textX, y: l.y0, conf, nLines: 1, bold: allBold, h: l.wordH, lastX1: l.x1 };
     } else if (cur && cur.type === 'li' && Math.abs(l.x0 - cur.textX) < lineH * 1.5 && gap < lineH * 1.1 && prev && prev.paraId === l.paraId) {
-      cur.mdParts.push(md); cur.nLines++; cur.bold = cur.bold && allBold;
+      cur.words = joinWords(cur.words, words); cur.nLines++; cur.bold = cur.bold && allBold; cur.lastX1 = l.x1;
     } else if (cur && cur.type === 'li' && Math.abs(l.x0 - cur.textX) < lineH * 1.5 && gap < lineH * 0.8) {
-      cur.mdParts.push(md); cur.nLines++; cur.bold = cur.bold && allBold;
+      cur.words = joinWords(cur.words, words); cur.nLines++; cur.bold = cur.bold && allBold; cur.lastX1 = l.x1;
     } else if (cur && cur.type === 'p' && prev && prev.paraId === l.paraId && gap < lineH * 0.9) {
-      cur.mdParts.push(md); cur.nLines++; cur.bold = cur.bold && allBold;
+      cur.words = joinWords(cur.words, words); cur.nLines++; cur.bold = cur.bold && allBold; cur.lastX1 = l.x1;
     } else {
       push();
-      cur = { type: 'p', level: 0, mdParts: [md], y: l.y0, conf, nLines: 1, bold: allBold, h: l.wordH, x0: l.x0 };
+      cur = { type: 'p', level: 0, words: words.slice(), y: l.y0, conf, nLines: 1, bold: allBold, h: l.wordH, x0: l.x0, lastX1: l.x1 };
     }
     prev = l;
   }
   push();
 
-  // 4) Überschriften: einzelne kurze Zeile, fett oder deutlich größer, ohne Satzzeichen am Ende
+  // 4) Satzzeichen prüfen; Überschriften: einzelne kurze Zeile, fett oder deutlich größer, ohne Satzzeichen am Ende
+  const right = Math.max(...lines.map((l) => l.x1));
   blocks.forEach((b, i) => {
-    b.md = b.mdParts.reduce((acc, part) => joinLine(acc, part), '');
+    // Endet die letzte Zeile deutlich vor dem rechten Rand oder beginnt der nächste Absatz
+    // eingerückt bzw. mit einem Anführungszeichen, ist hier wirklich ein Absatz zu Ende
+    const nx = blocks[i + 1];
+    b.ends = right - b.lastX1 > lineH * 1.2
+      || !!(nx && nx.type === 'p' && b.type === 'p' && nx.words.length && (nx.x0 > left + lineH * 0.6 || /^[»«„“"]/.test(nx.words[0].text)));
+    fixPunctuation(b.words, b.ends, quotes);
+    b.md = styledWords(b.words);
     if (b.nLines !== 1) return;
     const plain = plainInline(b.md).trim();
     const words = plain.split(/\s+/).length;
@@ -471,7 +560,7 @@ function blockToMd(b) {
 // Tesseract trennt Absätze manchmal mitten im Satz (z. B. bei kurzen Zeilen).
 // Fortsetzung erkennen: Vorgänger ohne Satzende und Nachfolger beginnt klein
 // oder Vorgänger endet mit Trennstrich/Komma.
-function mergeBroken(paras) {
+function mergeBroken(paras, quotes = null) {
   const out = [];
   for (const p of paras) {
     const prev = out[out.length - 1];
@@ -479,9 +568,14 @@ function mergeBroken(paras) {
     const prevPlain = prev ? plainInline(prev.md || prev.text || '') : '';
     if (prev && prev.type === 'p' && (p.type || 'p') === 'p' && !TERMINAL.test(prevPlain)
         && (/^[a-zäöüß]/.test(pPlain) || /[-,\u00AD¬]$/.test(prevPlain))) {
-      prev.md = joinLine(prev.md, p.md);
+      if (prev.words && p.words) {
+        prev.words = joinWords(prev.words, p.words);
+        prev.ends = p.ends;
+        fixPunctuation(prev.words, prev.ends, quotes);
+        prev.md = styledWords(prev.words);
+      } else prev.md = joinLine(prev.md, p.md);
     } else {
-      out.push({ ...p });
+      out.push({ ...p, words: p.words && p.words.slice() });
     }
   }
   return out;

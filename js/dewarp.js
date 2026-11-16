@@ -9,7 +9,7 @@
 
 const ANALYSIS_W = 1000;
 
-function grayOf(src, w, h) {
+export function grayOf(src, w, h) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d', { willReadFrequently: true });
@@ -21,7 +21,7 @@ function grayOf(src, w, h) {
 }
 
 // dunkel = Text (lokaler Mittelwert, Fenster ~ 1/30 der Breite)
-function binarize(g, w, h) {
+export function binarize(g, w, h) {
   const r = Math.max(8, Math.round(w / 30));
   const ii = new Float64Array((w + 1) * (h + 1));
   for (let y = 0; y < h; y++) {
@@ -42,7 +42,7 @@ function binarize(g, w, h) {
 }
 
 // Zusammenhängende dunkle Flächen (Buchstaben) → { lab, comps: [{id,x0,x1,y0,y1,n}] }
-function components(b, w, h) {
+export function components(b, w, h) {
   const lab = new Int32Array(w * h);
   const comps = [];
   const stack = [];

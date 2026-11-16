@@ -5,7 +5,7 @@
 import * as db from './db.js';
 import { analyzeOcr } from './textproc.js';
 import { grayImage, detectStyles } from './fontstyle.js';
-import { dewarpText, findDropCap } from './dewarp.js';
+import { dewarpText, findDropCap, grayOf, binarize, components } from './dewarp.js';
 
 const base = new URL('../vendor/tesseract/', import.meta.url).href;
 // Nur Deutsch erkennt Umlaute deutlich zuverlässiger als Deutsch+Englisch (das englische
@@ -80,7 +80,9 @@ async function ensureWorkers() {
         // Buchseiten: automatische Seitensegmentierung, Wortabstände erhalten
         let psm = '3';
         try { psm = localStorage.getItem('ob.psm') || psm; } catch (e) { /* */ }
-        await worker.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: '0' });
+        // Sauvola: Schwellwert je Umgebung statt für die ganze Seite → Schatten und Verläufe
+        // am Bund verschlucken keine Seitenzahlen und Zeilenenden mehr
+        await worker.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: '0', thresholding_method: '2' });
         workers.push({ worker, busy: false });
       }
     })().catch((e) => { workerInit = null; throw e; });
@@ -138,20 +140,8 @@ async function runOn(w) {
         // Ganze Seite ist eine Abbildung → kein Text
         await db.updatePage(pageId, { text: '', ocrStatus: 'done', paraY: [] });
       } else {
-        const { input, height, width, gray, dropCap, canvas } = await prepareImage(page.image, figures);
-        const { data } = await w.worker.recognize(input, {}, { blocks: true, text: true });
-        if (dropCap) await applyDropCap(w.worker, canvas, dropCap, data);
-        markStyles(data, gray);
-        const res = analyzeOcr(data, { height });
-        const patch = {
-          text: res.paras.join('\n\n'),
-          paraY: res.paraY,
-          ocrStatus: 'done',
-          confidence: Math.round(data.confidence || 0),
-        };
-        if (!page.printedNoManual) patch.printedNo = res.printedNo;
-        patch.uncertain = uncertainWords(data, patch.text);
-        patch.lines = lineBoxes(data, width, height);
+        const patch = await recognizePage(w.worker, page.image, figures);
+        if (page.printedNoManual) delete patch.printedNo;
         await db.updatePage(pageId, patch);
       }
     }
@@ -164,6 +154,34 @@ async function runOn(w) {
     notify();
     if (queue.length && !paused) runOn(w);
   }
+}
+
+// Eine Seite erkennen (ohne Datenbank) → { text, paraY, ocrStatus, confidence, printedNo, uncertain, lines }
+export async function recognizePage(worker, image, figures = []) {
+  const { input, height, width, gray, dropCap, canvas, page } = await prepareImage(image, figures);
+  const { data } = await worker.recognize(input, {}, { blocks: true, text: true });
+  if (dropCap) await applyDropCap(worker, canvas, dropCap, data);
+  markStyles(data, gray);
+  const res = analyzeOcr(data, { height });
+  if (res.printedNo == null && page) {
+    try { res.printedNo = await findPageNumberZones(worker, page, data); } catch (e) { console.warn('Seitenzahl-Suche', e); }
+  }
+  const patch = {
+    text: res.paras.join('\n\n'),
+    paraY: res.paraY,
+    ocrStatus: 'done',
+    confidence: Math.round(data.confidence || 0),
+    printedNo: res.printedNo,
+  };
+  patch.uncertain = uncertainWords(data, patch.text);
+  patch.lines = lineBoxes(data, width, height);
+  return patch;
+}
+
+// Für Tests: einen eigenen Worker erzeugen
+export async function createTestWorker() {
+  await ensureWorkers();
+  return workers[0].worker;
 }
 
 // Beim Start: unerledigte Seiten wieder einreihen
@@ -199,6 +217,7 @@ async function prepareImage(blob, figures) {
     const dw = dewarpText(c);
     if (dw) { c = dw; ctx = c.getContext('2d'); changed = true; }
   } catch (e) { console.warn('Zeilen geradeziehen übersprungen', e); }
+  try { if (whitenNonPaper(c)) changed = true; } catch (e) { console.warn('Ränder bereinigen übersprungen', e); }
   let dropCap = null, capCanvas = null;
   try {
     dropCap = findDropCap(c);
@@ -218,7 +237,117 @@ async function prepareImage(blob, figures) {
   let gray = null;
   try { gray = grayImage(c, width, height); } catch (e) { console.warn('Stil-Erkennung nicht möglich', e); }
   const input = changed ? await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.92)) : blob;
-  return { input, height, width, gray, dropCap, canvas: capCanvas };
+  return { input, height, width, gray, dropCap, canvas: capCanvas, page: c };
+}
+
+// Flächen ohne Papier (Schatten am Bund, Tischkante, Finger) weiß machen: Die Texterkennung
+// fasst sonst Seitenzahl oder Zeilenenden mit dem dunklen Fleck zu Unsinn zusammen.
+// Raster aus Zellen; eine Zelle ohne einen einzigen hellen (Papier-)Punkt ist kein Papier.
+// Nur größere zusammenhängende Gebiete zählen (dicke Buchstaben/Initialen bleiben).
+function whitenNonPaper(c) {
+  const W = c.width, H = c.height;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data;
+  const cell = Math.max(10, Math.round(Math.max(W, H) / 100));
+  const gw = Math.ceil(W / cell), gh = Math.ceil(H / cell);
+  const mx = new Uint8Array(gw * gh);
+  for (let y = 0; y < H; y += 2) {
+    const gy = (y / cell) | 0;
+    for (let x = 0; x < W; x += 2) {
+      const i = (y * W + x) * 4;
+      const v = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+      const k = gy * gw + ((x / cell) | 0);
+      if (v > mx[k]) mx[k] = v;
+    }
+  }
+  const sorted = [...mx].sort((a, b) => a - b);
+  const paper = sorted[Math.floor(sorted.length * 0.8)];
+  if (paper < 80) return false;
+  const dark = new Uint8Array(gw * gh);
+  for (let k = 0; k < dark.length; k++) dark[k] = mx[k] < paper * 0.6 ? 1 : 0;
+  // zusammenhängende dunkle Gebiete; kleine (≤ 8 Zellen) bleiben unangetastet
+  const seen = new Uint8Array(gw * gh);
+  let any = false;
+  for (let k = 0; k < dark.length; k++) {
+    if (!dark[k] || seen[k]) continue;
+    const reg = [k]; seen[k] = 1;
+    for (let q = 0; q < reg.length; q++) {
+      const p = reg[q], x = p % gw, y = (p / gw) | 0;
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+        if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+        const n = ny * gw + nx;
+        if (dark[n] && !seen[n]) { seen[n] = 1; reg.push(n); }
+      }
+    }
+    if (reg.length <= 8) continue;
+    any = true;
+    for (const p of reg) {
+      const x0 = (p % gw) * cell, y0 = ((p / gw) | 0) * cell;
+      for (let y = y0; y < Math.min(H, y0 + cell); y++) for (let x = x0; x < Math.min(W, x0 + cell); x++) {
+        const i = (y * W + x) * 4; d[i] = d[i + 1] = d[i + 2] = 255;
+      }
+    }
+  }
+  if (any) ctx.putImageData(img, 0, 0);
+  return any;
+}
+
+// Kleine, allein stehende Seitenzahlen übersieht die Seitenaufteilung der OCR oft.
+// Dann den Streifen unter (und über) dem Text getrennt lesen.
+const PSM = () => { try { return localStorage.getItem('ob.psm') || '3'; } catch (e) { return '3'; } };
+async function findPageNumberZones(worker, c, data) {
+  const W = c.width, H = c.height;
+  const boxes = [];
+  for (const block of data.blocks || []) for (const para of block.paragraphs || []) for (const line of para.lines || []) {
+    if (line.bbox && (line.confidence || 0) > 50 && (line.text || '').trim().length > 3) boxes.push(line.bbox);
+  }
+  if (boxes.length < 3) return null;
+  const hs = boxes.map((b) => b.y1 - b.y0).sort((a, b) => a - b);
+  const lh = hs[Math.floor(hs.length / 2)];
+  const top = Math.min(...boxes.map((b) => b.y0)), bottom = Math.max(...boxes.map((b) => b.y1));
+  const left = Math.min(...boxes.map((b) => b.x0)), right = Math.max(...boxes.map((b) => b.x1));
+  const zones = [
+    [bottom + lh * 0.25, H - H * 0.01],
+    [Math.max(H * 0.01, top - lh * 6), top - lh * 0.25],
+  ];
+  try {
+    await worker.setParameters({ tessedit_pageseg_mode: '6' });
+    for (const [y0, y1] of zones) {
+      if (y1 - y0 < lh * 0.8) continue;
+      const x0 = Math.max(0, left - lh), x1 = Math.min(W, right + lh);
+      const k = lh < 40 ? 2 : 1; // kleine Schrift vergrößern
+      const z = document.createElement('canvas');
+      z.width = Math.round((x1 - x0) * k); z.height = Math.round((y1 - y0) * k);
+      const zc = z.getContext('2d');
+      zc.imageSmoothingQuality = 'high';
+      zc.drawImage(c, x0, y0, x1 - x0, y1 - y0, 0, 0, z.width, z.height);
+      // nur schriftgroße Flecken behalten (Schattenkeile, Tischkanten, Fussel weg)
+      const zw = z.width, zh = z.height;
+      const bin = binarize(grayOf(z, zw, zh), zw, zh);
+      const { lab, comps } = components(bin, zw, zh);
+      const L = lh * k;
+      const keep = new Uint8Array(comps.length + 1);
+      let kept = 0;
+      for (const cp of comps) {
+        const ch = cp.y1 - cp.y0 + 1, cw = cp.x1 - cp.x0 + 1;
+        if (ch >= L * 0.3 && ch <= L * 1.6 && cw <= L * 3 && cp.n >= 6 && cp.x0 > 0 && cp.x1 < zw - 1) { keep[cp.id] = 1; kept++; }
+      }
+      if (!kept) continue;
+      const out = zc.createImageData(zw, zh);
+      for (let i = 0; i < lab.length; i++) { const v = lab[i] && keep[lab[i]] ? 0 : 255; out.data[i * 4] = out.data[i * 4 + 1] = out.data[i * 4 + 2] = v; out.data[i * 4 + 3] = 255; }
+      zc.putImageData(out, 0, 0);
+      const r = await worker.recognize(z);
+      for (const ln of (r.data.text || '').split('\n')) {
+        const t = ln.trim();
+        const m = t.match(/^[-–—.\s]*(\d{1,4})[-–—.\s]*$/) || (t.length <= 70 && (t.match(/^(\d{1,4})\s+\S/) || t.match(/\S\s+(\d{1,4})$/)));
+        if (m && (r.data.confidence || 0) >= 55 && +m[1] >= 1) return +m[1];
+      }
+    }
+  } finally {
+    await worker.setParameters({ tessedit_pageseg_mode: PSM() }).catch(() => {});
+  }
+  return null;
 }
 
 // Initiale einzeln erkennen (ein Zeichen) und vor das erste Wort der Zeile daneben setzen
@@ -312,3 +441,4 @@ function lineBoxes(data, width, height) {
   }
   return out;
 }
+
