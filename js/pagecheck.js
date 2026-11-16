@@ -16,6 +16,12 @@ function knownNumbers(pages) {
     const prev = known[k - 1], next = known[k + 1];
     if (fits(prev, cur) || fits(cur, next)) return true;
     if (prev && next && fits(prev, next)) return false;
+    // Am Rand: Die beiden Nachbarzahlen passen zueinander, und diese Zahl ist die erwartete mit
+    // verschluckter Ziffer (z. B. „11“ als „1“ gelesen vor 12, 13) → Lesefehler, keine Lücke
+    const next2 = known[k + 2], prev2 = known[k - 2];
+    const dropped = (n, expect) => expect > 0 && String(n).length < String(expect).length && String(expect).includes(String(n));
+    if (!prev && next && next2 && fits(next, next2) && dropped(cur.n, next.n - (next.i - cur.i))) return false;
+    if (!next && prev && prev2 && fits(prev2, prev) && dropped(cur.n, prev.n + (cur.i - prev.i))) return false;
     // Am Rand: Sprung riesig und kein Nachbar bestätigt → vermutlich Lesefehler
     if (!next && prev && Math.abs(cur.n - prev.n - (cur.i - prev.i)) > MAX_PLAUSIBLE_GAP) return false;
     if (!prev && next && Math.abs(next.n - cur.n - (next.i - cur.i)) > MAX_PLAUSIBLE_GAP) return false;
