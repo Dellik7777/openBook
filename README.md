@@ -41,7 +41,7 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - Hintergründe: Weiß, Papier, Sepia, Dunkel, Schwarz
 - Fußzeile mit Buchseite und Prozent oder verbleibender Lesezeit (antippen zum Umschalten)
 - Lesezeichen, Volltextsuche, Seitenübersicht, Schieberegler
-- **Vorlesen** mit der Stimme des Geräts – blättert mit und hebt den Absatz hervor; **Stimmenauswahl mit Hörprobe** (beste Stimme „Premium“/„Erweitert“ wird automatisch gewählt, Anleitung zum Laden besserer Stimmen)
+- **Vorlesen** mit der Stimme des Geräts – blättert mit und hebt den Absatz hervor; **Stimmenauswahl mit Hörprobe**; zusätzlich **eigene natürliche Stimmen** (Piper „Thorsten“, „Kerstin“, „Ramona“), die einmal geladen werden und dann offline auf dem Gerät laufen – unabhängig davon, welche Stimmen der Browser freigibt
 - **Inhaltsverzeichnis** aus den erkannten Überschriften, „Noch X Min. im Kapitel“
 - **Markieren und Notizen** in vier Farben, Liste aller Markierungen, Export als Markdown
 - **Zwei Spalten im Querformat** auf dem Tablet

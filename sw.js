@@ -48,6 +48,7 @@ const SHELL_FILES = [
   'js/vault.js',
   'js/dewarp.js',
   'js/corners.js',
+  'js/piper.js',
   'js/config.js',
   'js/sync/sync.js',
   'js/sync/oauth.js',

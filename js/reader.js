@@ -994,16 +994,19 @@ export async function openReader(root, bookId) {
     const SYSTEM = 'system';
     const useSystem = () => settings.ttsVoice === SYSTEM;
     function voice() {
-      if (useSystem()) return null;
+      if (useSystem() || engineIsPiper()) return null;
       const vs = voices();
       return (settings.ttsVoice && vs.find((v) => (v.voiceURI || v.name) === settings.ttsVoice)) || vs[0] || null;
     }
     const shortName = (v) => v.name.replace(/\s*\(.*\)\s*$/, '').replace(/^.*\.([^.]+)$/, '$1');
     function voiceLabel() {
       const v = voice();
+      if (engineIsPiper()) { voiceBtn.lastChild.textContent = (piperMod && piperMod.VOICES[piperId()] ? piperMod.VOICES[piperId()].name : 'Eigene Stimme'); if (!piperMod) piper().then(() => voiceLabel()); return; }
       voiceBtn.lastChild.textContent = useSystem() ? 'Systemstimme' : v ? shortName(v) : 'Vorlesen';
     }
     function sample(v) {
+      stopPiper();
+      if (!synth) return;
       synth.cancel();
       const u = new SpeechSynthesisUtterance('Hallo, so klinge ich, wenn ich dir dein Buch vorlese.');
       u.lang = 'de-DE'; if (v) u.voice = v; u.rate = settings.ttsRate || 1;
@@ -1015,13 +1018,13 @@ export async function openReader(root, bookId) {
       const vs = voices();
       const sel = voice();
       const entries = [{ system: true }, ...vs];
-      const isSel = (e) => (e.system ? useSystem() : !useSystem() && sel === e);
+      const isSel = (e) => (e.system ? useSystem() : !useSystem() && !engineIsPiper() && sel === e);
       const list = h('div', { class: 'menu' }, entries.map((e, i) => h('button', {
         class: 'menu-item voice-item' + (isSel(e) ? ' current' : ''),
         onClick: () => {
           settings.ttsVoice = e.system ? SYSTEM : e.voiceURI || e.name;
           saveSettings(settings);
-          list.querySelectorAll('.current').forEach((x) => x.classList.remove('current'));
+          document.querySelectorAll('.sheet .current').forEach((x) => x.classList.remove('current'));
           list.querySelectorAll('.voice-item')[i].classList.add('current');
           voiceLabel();
           sample(e.system ? null : e);
@@ -1037,7 +1040,64 @@ export async function openReader(root, bookId) {
         h('p', { class: 'small' }, h('b', {}, 'iPhone/iPad: '), 'Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Deutsch → z. B. „Anna“, „Petra“ oder „Yannick“ → die Premium- bzw. Erweitert-Variante laden. Danach Lesepixel neu öffnen. Ob Safari sie an Lesepixel weitergibt, entscheidet Apple.'),
         h('p', { class: 'small' }, h('b', {}, 'Android: '), 'Einstellungen → Bedienungshilfen → Sprachausgabe (Text-in-Sprache) → Google-Sprachausgabe → Sprachdaten installieren → Deutsch, dort eine Stimme wählen.'),
         h('p', { class: 'small muted' }, 'Die Siri-Stimmen gibt Apple für Web-Apps leider nicht frei.'));
-      sheet('Stimme', h('div', { class: 'stack' }, list, note, help), { onClose: () => { synth.cancel(); if (wasActive) play(); } });
+      const own = h('div', { class: 'stack own-voices' });
+      sheet('Stimme', h('div', { class: 'stack' }, own, h('h4', { class: 'voice-head' }, 'Stimmen des Geräts'), list, note, help), { onClose: () => { stopPiper(); if (synth) synth.cancel(); if (wasActive) play(); } });
+      renderOwnVoices(own);
+    }
+    // Eigene Stimmen (Piper): laden, wählen, löschen
+    async function renderOwnVoices(box) {
+      const m = await piper();
+      if (!m.supported()) { box.remove(); return; }
+      const have = new Set(await m.installed());
+      const rows = Object.entries(m.VOICES).map(([id, v]) => {
+        const isCur = engineIsPiper() && piperId() === id;
+        const status = h('span', { class: 'voice-q' + (have.has(id) ? ' q3' : '') }, have.has(id) ? 'Geladen' : `${v.mb} MB`);
+        const prog = h('div', { class: 'progress', hidden: true }, h('div', { style: { width: '0%' } }));
+        const row = h('div', { class: 'own-voice' });
+        const choose = async () => {
+          if (!have.has(id)) {
+            if (!navigator.onLine) { toast('Zum Laden der Stimme ist Internet nötig'); return; }
+            prog.hidden = false; status.textContent = '0 %';
+            try {
+              await m.install(id, (x) => { prog.firstChild.style.width = Math.round(x * 100) + '%'; status.textContent = Math.round(x * 100) + ' %'; });
+              try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) { /* */ }
+            } catch (e) {
+              console.warn(e); prog.hidden = true; status.textContent = `${v.mb} MB`;
+              toast('Laden fehlgeschlagen – bitte später noch einmal versuchen'); return;
+            }
+            prog.hidden = true;
+            have.add(id); status.textContent = 'Geladen'; status.classList.add('q3');
+            del.hidden = false;
+          }
+          settings.ttsVoice = 'piper:' + id;
+          saveSettings(settings);
+          document.querySelectorAll('.sheet .current').forEach((x) => x.classList.remove('current'));
+          btn.classList.add('current');
+          voiceLabel();
+          if (synth) synth.cancel();
+          stopPiper();
+          const gen = ++piperGen;
+          toast('Stimme wird vorbereitet …', 1500);
+          try {
+            const audio = await piperAudio('Hallo, so klinge ich, wenn ich dir dein Buch vorlese.');
+            if (gen === piperGen) piperPlay = m.play(audio);
+          } catch (e) { console.warn(e); toast('Die Stimme konnte nicht sprechen'); }
+        };
+        const btn = h('button', { class: 'menu-item voice-item' + (isCur ? ' current' : ''), onClick: choose },
+          icon('speaker'), h('span', { class: 'grow' }, h('span', {}, v.name), h('span', { class: 'muted small voice-desc' }, v.desc)), status);
+        const del = iconButton('trash', 'Stimme löschen', async () => {
+          await m.remove(id); have.delete(id);
+          status.textContent = `${v.mb} MB`; status.classList.remove('q3'); del.hidden = true;
+          if (piperId() === id && engineIsPiper()) { settings.ttsVoice = ''; saveSettings(settings); btn.classList.remove('current'); voiceLabel(); }
+          toast('Stimme gelöscht');
+        });
+        del.hidden = !have.has(id);
+        row.append(btn, del);
+        return h('div', {}, row, prog);
+      });
+      box.append(h('h4', { class: 'voice-head' }, 'Eigene Stimmen (natürlicher)'),
+        h('p', { class: 'small muted' }, 'Laufen direkt auf dem Gerät, auch offline. Einmal laden (Internet nötig, dabei wird nur die Stimme heruntergeladen, kein Text gesendet).'),
+        h('div', { class: 'menu' }, rows));
     }
     // Stimmen werden auf manchen Geräten erst nach und nach geladen
     try { if (synth && synth.addEventListener) synth.addEventListener('voiceschanged', () => { if (!bar.hidden) voiceLabel(); }); } catch (e) { /* */ }
@@ -1047,7 +1107,7 @@ export async function openReader(root, bookId) {
       settings.ttsRate = rates[(i + 1) % rates.length];
       saveSettings(settings);
       rateBtn.textContent = rateTxt();
-      if (active) { synth.cancel(); speakFrom(cur); }
+      if (active) { if (utter) utter.__cancelled = true; stopPiper(); if (synth) synth.cancel(); speakFrom(cur); }
     }
     function markSpeaking(fi) {
       content.querySelectorAll('.speaking').forEach((e) => e.classList.remove('speaking'));
@@ -1061,47 +1121,118 @@ export async function openReader(root, bookId) {
       const sc = screenOfChar(fi, char);
       if (sc !== screen) showScreen(sc, true);
     }
-    function speakFrom(at) {
+    // Nächstes Stück Text ab einer Stelle (Sätze bis ca. 280 Zeichen; lange Äußerungen
+    // brechen auf manchen Geräten ab, und die eigene Stimme braucht kurze Stücke)
+    function pieceAt(at) {
       let { fi, char } = at;
       while (fi < flow.length && (flow[fi].placeholder || (flow[fi].figure && !flow[fi].caption))) { fi++; char = 0; }
-      if (fi >= flow.length) { stop(); toast('Ende des Buchs'); return; }
-      // Schlaf-Timer „Kapitelende“: nächste Kapitelüberschrift erreicht
-      if (sleep && sleep.chapter && fi > sleep.fromFi && (flow[fi].block === 'h1' || (flow[fi].block === 'h2' && !toc.some((t) => t.level === 0)))) { sleepNow(); return; }
+      if (fi >= flow.length) return null;
       const f = flow[fi];
       const text = f.figure ? 'Abbildung: ' + f.caption : f.text;
-      // In Sätze bis ca. 280 Zeichen teilen (lange Äußerungen brechen auf manchen Geräten ab)
-      let end = Math.min(text.length, char + 280);
+      const max = engineIsPiper() ? 180 : 280;
+      let end = Math.min(text.length, char + max);
       if (end < text.length) {
         const sub = text.slice(char, end);
         const m = sub.match(/^[\s\S]*[.!?…:;](?=\s)/);
-        if (m && m[0].length > 40) end = char + m[0].length;
-        else { const sp = sub.lastIndexOf(' '); if (sp > 40) end = char + sp; }
+        if (m && m[0].length > 30) end = char + m[0].length;
+        else { const sp = sub.lastIndexOf(' '); if (sp > 30) end = char + sp; }
       }
-      const piece = text.slice(char, end);
+      const next = end >= text.length ? { fi: fi + 1, char: 0 } : { fi, char: end + (text[end] === ' ' ? 1 : 0) };
+      return { fi, char, f, text, end, piece: text.slice(char, end), next };
+    }
+    function speakFrom(at) {
+      const pc = pieceAt(at);
+      if (!pc) { stop(); toast('Ende des Buchs'); return; }
+      const { fi, char, f, piece, next } = pc;
+      // Schlaf-Timer „Kapitelende“: nächste Kapitelüberschrift erreicht
+      if (sleep && sleep.chapter && fi > sleep.fromFi && (flow[fi].block === 'h1' || (flow[fi].block === 'h2' && !toc.some((t) => t.level === 0)))) { sleepNow(); return; }
       cur = { fi, char };
       chunkFi = fi; chunkBase = char;
       markSpeaking(fi);
       follow(fi, char);
+      recordActivity();
+      const onWord = (ci) => {
+        cur = { fi: chunkFi, char: chunkBase + ci };
+        if (!f.figure) follow(chunkFi, cur.char);
+      };
+      if (engineIsPiper()) { speakPiper(piece, onWord, next); return; }
       utter = new SpeechSynthesisUtterance(piece);
       utter.lang = 'de-DE';
       const v = voice(); if (v) utter.voice = v;
       utter.rate = settings.ttsRate || 1;
       utter.onboundary = (e) => {
         if (e.name && e.name !== 'word') return;
-        cur = { fi: chunkFi, char: chunkBase + e.charIndex };
-        if (!f.figure) follow(chunkFi, cur.char);
+        onWord(e.charIndex);
       };
       utter.onend = () => {
         if (!active || utter.__cancelled) return;
-        const next = end >= text.length ? { fi: fi + 1, char: 0 } : { fi, char: end + (text[end] === ' ' ? 1 : 0) };
         speakFrom(next);
       };
       utter.onerror = (e) => { if (e.error !== 'interrupted' && e.error !== 'canceled') { console.warn('TTS', e.error); } };
       synth.speak(utter);
-      recordActivity();
+    }
+
+    // ---- Eigene Stimme (Piper, läuft auf dem Gerät) ----
+    let piperMod = null, piperGen = 0, piperPlay = null, piperTick = null;
+    const piperCache = new Map(); // key → Promise<audio>
+    const piperId = () => (settings.ttsVoice || '').slice(6);
+    function engineIsPiper() { return /^piper:/.test(settings.ttsVoice || ''); }
+    async function piper() { if (!piperMod) piperMod = await import('./piper.js'); return piperMod; }
+    function piperAudio(text) {
+      const key = piperId() + '|' + (settings.ttsRate || 1) + '|' + text;
+      if (!piperCache.has(key)) {
+        piperCache.set(key, piper().then((m) => m.synthesize(piperId(), text, { rate: settings.ttsRate || 1 })));
+        while (piperCache.size > 6) piperCache.delete(piperCache.keys().next().value);
+      }
+      return piperCache.get(key);
+    }
+    function stopPiper() {
+      piperGen++;
+      clearInterval(piperTick);
+      if (piperPlay) { piperPlay.stop(); piperPlay = null; }
+    }
+    async function speakPiper(piece, onWord, next) {
+      const gen = ++piperGen;
+      let audio;
+      try {
+        audio = await piperAudio(piece);
+      } catch (e) {
+        console.warn('Eigene Stimme', e);
+        if (gen !== piperGen) return;
+        toast('Die eigene Stimme konnte nicht sprechen – es liest die Gerätestimme vor', 4000);
+        settings.ttsVoice = '';
+        saveSettings(settings);
+        voiceLabel();
+        if (active) speakFrom(cur);
+        return;
+      }
+      if (gen !== piperGen || !active) return;
+      // nächstes Stück schon vorbereiten, damit keine Pause entsteht
+      const pn = pieceAt(next);
+      if (pn) piperAudio(pn.piece).catch(() => {});
+      const m = await piper();
+      piperPlay = m.play(audio);
+      const h0 = piperPlay;
+      // Wortgrenzen: gleichmäßig über die Dauer verteilt (die Stimme liefert keine Zeitmarken)
+      const words = [...piece.matchAll(/\S+/g)].map((x) => x.index);
+      const ac = m.audioContext();
+      piperTick = setInterval(() => {
+        if (gen !== piperGen) return;
+        const t = Math.min(1, (ac.currentTime - h0.started) / Math.max(0.1, h0.duration));
+        const ci = Math.floor(t * piece.length);
+        let w = 0;
+        for (const x of words) { if (x <= ci) w = x; else break; }
+        onWord(w);
+      }, 250);
+      const ended = await h0.done;
+      clearInterval(piperTick);
+      if (!ended || gen !== piperGen || !active) return;
+      piperPlay = null;
+      speakFrom(next);
     }
     function play() {
-      if (!synth) { toast('Vorlesen wird von diesem Browser nicht unterstützt'); return; }
+      if (!synth && !engineIsPiper()) { toast('Vorlesen wird von diesem Browser nicht unterstützt'); return; }
+      if (engineIsPiper()) piper().then((m) => m.audioContext()); // muss in der Tipp-Geste starten (iOS)
       if (settings.mode !== 'text') { switchModeTo('text', pos?.pageIndex ?? 0); }
       active = true;
       bar.hidden = false;
@@ -1112,7 +1243,8 @@ export async function openReader(root, bookId) {
     function pause() {
       active = false;
       if (utter) utter.__cancelled = true;
-      synth.cancel();
+      stopPiper();
+      if (synth) synth.cancel();
       playBtn.replaceChildren(icon('play')); playBtn.setAttribute('aria-label', 'Weiter vorlesen');
     }
     function stop() {

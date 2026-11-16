@@ -615,6 +615,11 @@ html.locked #app { visibility: hidden; }
 .tts-voice .tts-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: underline dotted rgba(255,255,255,.5); text-underline-offset: 3px; }
 .voice-q { font: 600 11px var(--font-ui); padding: 2px 6px; border-radius: 4px; background: var(--line, #e3e3e3); color: var(--muted, #666); }
 .voice-q.q3, .voice-q.q2 { background: #F28C28; color: #fff; }
+.voice-head { margin: 8px 0 0; font: 600 13px var(--font-ui); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.own-voice { display: flex; align-items: center; gap: 4px; }
+.own-voice .voice-item { flex: 1; min-width: 0; }
+.voice-item .voice-desc { display: block; font-weight: 400; }
+.own-voices .progress { margin: 0 0 8px; }
 .voice-help summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .voice-help p { margin: 6px 0; }
 .tts-rate { background: #3B4760; color: #fff; border: 0; border-radius: 4px; font: 600 13px var(--font-ui); padding: 6px 10px; }
