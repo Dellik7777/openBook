@@ -21,6 +21,13 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Abbildungs-Modus:** Karten, Bilder und Diagramme in Farbe als ganze Seite fotografieren
 - **Galerie-Fotos nach Seitenzahl ordnen:** durcheinander importierte Seiten mit einem Tipp in die richtige Reihenfolge bringen (mit „Rückgängig“)
 
+**Scannen 3.0**
+- **Blättermodus:** Handy ruhig halten und einfach umblättern – jede neue Seite wird automatisch fotografiert
+- **Einzel- und Doppelseiten** werden automatisch erkannt und am Bundsteg geteilt
+- **Live-Rückmeldung** mit Ton und Vibration: „S. 45 ✓“ nach jeder erkannten Seite
+- **Doppelt fotografierte Seiten** werden verworfen; Hinweise bei **Finger im Bild** und **angeschnittener Seite**
+- **Fertig-Prüfung** am Ende: fehlende Seiten (direkt nachscannen), Dubletten, Reihenfolge, Fotoqualität, Textprüfung
+
 **Texterkennung (OCR)**
 - Tesseract läuft komplett im Browser, auch offline; Standard ist **Deutsch** (zuverlässigste Umlaute), wahlweise Deutsch + Englisch oder Englisch
 - **Gewölbte Zeilen werden gerade gezogen**, bevor der Text erkannt wird (sonst hält die Erkennung gebogene Zeilen für zwei Spalten)
