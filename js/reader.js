@@ -860,6 +860,12 @@ export async function openReader(root, bookId, { listen = false } = {}) {
     ...Object.entries(HL_COLORS).map(([c, label]) => h('button', { class: 'hl-dot-btn c-' + c, 'aria-label': 'Markieren: ' + label, onClick: () => createHighlight(c) })),
     h('button', { class: 'hl-bar-btn', onClick: () => createHighlight('yellow', true) }, icon('note'), 'Notiz'),
     h('button', { class: 'hl-bar-btn', onClick: () => { navigator.clipboard && navigator.clipboard.writeText(String(window.getSelection())); toast('Kopiert'); hideHlBar(); } }, 'Kopieren'),
+    h('button', { class: 'hl-bar-btn', 'aria-label': 'Zitat teilen', onClick: async () => {
+      const text = String(window.getSelection()).trim();
+      hideHlBar();
+      if (!text) return;
+      (await import('./quotecard.js')).openQuoteCard({ text, title: book.title, author: book.author });
+    } }, icon('upload'), 'Teilen'),
     h('button', { class: 'hl-bar-btn', 'aria-label': 'Nachschlagen', onClick: async () => {
       const term = String(window.getSelection()).trim();
       hideHlBar();
@@ -896,7 +902,7 @@ export async function openReader(root, bookId, { listen = false } = {}) {
       hlBar.hidden = false;
       const bw = hlBar.offsetWidth || 280;
       hlBar.style.left = Math.max(8, Math.min(vr.width - bw - 8, r.left + r.width / 2 - bw / 2 - vr.left)) + 'px';
-      const above = r.top - vr.top - 56;
+      const above = r.top - vr.top - (hlBar.offsetHeight || 48) - 8;
       hlBar.style.top = (above > 40 ? above : r.bottom - vr.top + 12) + 'px';
     }, 200);
   };
@@ -951,6 +957,7 @@ export async function openReader(root, bookId, { listen = false } = {}) {
       h('div', { class: 'row gap-s wrap' },
         h('button', { class: 'btn primary', onClick: async () => { await update({ color, note: note.value.trim() }); sh.close(); } }, 'Speichern'),
         h('button', { class: 'btn', onClick: () => { navigator.clipboard && navigator.clipboard.writeText(hl.text + (note.value ? '\n\nNotiz: ' + note.value : '')); toast('Kopiert'); } }, 'Kopieren'),
+        h('button', { class: 'btn', onClick: async () => { sh.close(); (await import('./quotecard.js')).openQuoteCard({ text: hl.text, title: book.title, author: book.author }); } }, icon('upload'), 'Als Bild teilen'),
         h('button', { class: 'btn danger', onClick: async () => { await update({ deleted: true }); sh.close(); toast('Markierung entfernt'); } }, icon('trash'), 'Entfernen'),
       ),
     ));

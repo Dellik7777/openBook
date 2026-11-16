@@ -598,7 +598,7 @@ html.locked #app { visibility: hidden; }
 .hl-dot { display: inline-block; width: 12px; height: 12px; border-radius: 2px; flex: none; margin-top: 4px; }
 .hl-dot-btn { width: 30px; height: 30px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); }
 .hl-dot-btn.on { outline: 2px solid var(--ink); outline-offset: 2px; }
-.hl-bar { position: absolute; z-index: 8; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: #293244; border-radius: 4px; box-shadow: 0 6px 24px rgba(0,0,0,.3); }
+.hl-bar { position: absolute; z-index: 8; display: flex; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 16px); box-sizing: border-box; align-items: center; gap: 6px; padding: 6px 8px; background: #293244; border-radius: 4px; box-shadow: 0 6px 24px rgba(0,0,0,.3); }
 .hl-bar .hl-dot-btn { width: 26px; height: 26px; border-color: rgba(255,255,255,.4); }
 .hl-bar-btn { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; color: #fff; font: 600 13px var(--font-ui); padding: 4px 6px; }
 .hl-bar-btn .icon { width: 16px; height: 16px; }
@@ -820,3 +820,6 @@ html.locked #app { visibility: hidden; }
 .continue-progress > div { height: 100%; background: #F28C28; border-radius: 3px; }
 .continue-actions { margin-top: auto; padding-top: 6px; }
 .continue-actions .btn:not(.primary) { background: rgba(255,255,255,.1); color: #fff; border-color: rgba(255,255,255,.25); }
+
+/* Zitatkarte */
+.quote-preview { width: 100%; max-width: 360px; align-self: center; aspect-ratio: 1080 / 1350; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); background: var(--line); }

@@ -54,6 +54,7 @@ const SHELL_FILES = [
   'js/proofread.js',
   'js/proofview.js',
   'js/names.js',
+  'js/quotecard.js',
   'js/config.js',
   'js/version.js',
   'js/sync/sync.js',
