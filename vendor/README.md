@@ -10,7 +10,7 @@ Damit Lesepixel komplett offline funktioniert, liegen diese Dateien direkt im Re
 | `qr/qrcode.js` | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4 | MIT |
 | `qr/jsQR.js` | [jsQR](https://github.com/cozmo/jsQR) 1.4.0 (QR-Codes lesen, wenn der Browser keinen eingebauten Leser hat) | Apache-2.0 |
 | `pdfjs/` | [PDF.js](https://github.com/mozilla/pdf.js) 4.10.38 (`pdfjs-dist`, Legacy-Build; PDF-Import, wird erst bei Bedarf geladen) | Apache-2.0 (`LICENSE`) |
-| `ort/` | [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) 1.18.0 (`onnxruntime-web`, nur `ort.wasm.min.js` + `ort-wasm-simd.wasm`; eigene Stimmen, wird erst bei Bedarf geladen) | MIT |
+| `ort/` | [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) 1.18.0 (`onnxruntime-web`, nur `ort.wasm.esm.min.js` (ESM-Build, im Web Worker) + `ort-wasm-simd.wasm`; eigene Stimmen, wird erst bei Bedarf geladen) | MIT |
 | `piper/` | [piper-wasm](https://github.com/diffusionstudio/piper-wasm) 1.0.0 (Build von [piper-phonemize](https://github.com/rhasspy/piper-phonemize) mit [eSpeak NG](https://github.com/rhasspy/espeak-ng) und dessen Sprachdaten); `phonemize.js` ist der Lade-Code aus [vits-web](https://github.com/diffusionstudio/vits-web) 1.0.3 | MIT; eSpeak NG: GPL-3.0 (unverändert, Quelltext unter dem Link) |
 | `wordlist/deu.txt` | deutsche Wortliste aus [tesseract-ocr/langdata_lstm](https://github.com/tesseract-ocr/langdata_lstm) (`deu.wordlist`, bereinigt) für die Textprüfung | Apache-2.0 |
 | `fonts/literata-*` | [Literata](https://github.com/googlefonts/literata) über @fontsource | SIL OFL 1.1 |

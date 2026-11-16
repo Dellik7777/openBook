@@ -2,7 +2,7 @@
 // App-Dateien: zuerst aus dem Cache, im Hintergrund aktualisieren.
 // OCR-Engine & Sprachdaten (groß, ändern sich nie): Cache zuerst.
 
-const VERSION = 'v18';
+const VERSION = 'v19';
 const SHELL = `openbook-shell-${VERSION}`;
 const VENDOR = 'openbook-vendor-v1';
 
@@ -49,6 +49,7 @@ const SHELL_FILES = [
   'js/dewarp.js',
   'js/corners.js',
   'js/piper.js',
+  'js/piper-worker.js',
   'js/proofread.js',
   'js/proofview.js',
   'js/config.js',

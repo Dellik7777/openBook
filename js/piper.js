@@ -6,7 +6,6 @@
 // Die Sprachmodelle sind groß (ca. 60 MB) und werden nur auf Wunsch einmal von Hugging Face
 // geladen (dabei wird kein Text übertragen) und dann im Speicher der App aufbewahrt.
 
-const base = new URL('../vendor/', import.meta.url).href;
 const CACHE = 'ob-voices-v1';
 const HOSTS = [
   'https://huggingface.co/rhasspy/piper-voices/resolve/main/',
@@ -16,66 +15,41 @@ const HOSTS = [
 // Freie deutsche Stimmen (Datensätze CC0 bzw. frei; siehe Modellkarten bei Hugging Face)
 export const VOICES = {
   'de_DE-thorsten-medium': { name: 'Thorsten', desc: 'Männlich, natürlich (empfohlen)', path: 'de/de_DE/thorsten/medium/de_DE-thorsten-medium', mb: 63 },
-  'de_DE-thorsten-high': { name: 'Thorsten (hoch)', desc: 'Männlich, beste Qualität, braucht mehr Rechenzeit', path: 'de/de_DE/thorsten/high/de_DE-thorsten-high', mb: 114 },
+  'de_DE-thorsten-low': { name: 'Thorsten (schnell)', desc: 'Männlich, etwas einfacher, rechnet schneller', path: 'de/de_DE/thorsten/low/de_DE-thorsten-low', mb: 63 },
+  'de_DE-eva_k-x_low': { name: 'Eva (sehr schnell)', desc: 'Weiblich, klein, für ältere Geräte', path: 'de/de_DE/eva_k/x_low/de_DE-eva_k-x_low', mb: 21 },
+  'de_DE-thorsten-high': { name: 'Thorsten (hoch)', desc: 'Männlich, beste Qualität, braucht viel Rechenzeit', path: 'de/de_DE/thorsten/high/de_DE-thorsten-high', mb: 114 },
   'de_DE-kerstin-low': { name: 'Kerstin', desc: 'Weiblich', path: 'de/de_DE/kerstin/low/de_DE-kerstin-low', mb: 63 },
   'de_DE-ramona-low': { name: 'Ramona', desc: 'Weiblich', path: 'de/de_DE/ramona/low/de_DE-ramona-low', mb: 63 },
 };
 
-let ortPromise = null;
-function loadOrt() {
-  if (window.ort) return Promise.resolve(window.ort);
-  if (!ortPromise) {
-    ortPromise = new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = base + 'ort/ort.wasm.min.js';
-      s.onload = () => {
-        const o = window.ort;
-        o.env.wasm.wasmPaths = base + 'ort/';
-        o.env.wasm.numThreads = 1; // ohne Cross-Origin-Isolation gibt es keine Threads
-        o.env.wasm.simd = true;
-        resolve(o);
-      };
-      s.onerror = () => { ortPromise = null; reject(new Error('Sprachmodul konnte nicht geladen werden')); };
-      document.head.append(s);
-    });
+// Die Berechnung läuft in einem Web Worker (piper-worker.js) – sonst stünde die Oberfläche
+// während jedes Satzes still (auf dem iPhone mehrere Sekunden).
+let worker = null, seq = 0;
+const pending = new Map();
+function getWorker() {
+  if (!worker) {
+    worker = new Worker(new URL('./piper-worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = (e) => {
+      const p = pending.get(e.data.id);
+      if (!p) return;
+      pending.delete(e.data.id);
+      if (e.data.error) p.reject(new Error(e.data.error)); else p.resolve(e.data);
+    };
+    worker.onerror = (e) => {
+      const err = new Error(e.message || 'Fehler in der Sprachberechnung');
+      for (const p of pending.values()) p.reject(err);
+      pending.clear();
+      worker = null;
+    };
   }
-  return ortPromise;
+  return worker;
 }
-
-let phonModule = null;
-export let lastPhon = null; // zur Fehlersuche
-async function phonemizer() {
-  if (!phonModule) phonModule = import(base + 'piper/phonemize.js');
-  return (await phonModule).createPiperPhonemize;
-}
-
-// Text → Lautschrift. Eine Instanz von espeak-ng wird wiederverwendet (das Laden der
-// Sprachdaten dauert, ein Aufruf nur Millisekunden); Aufrufe nacheinander, nicht gleichzeitig.
-let phonInst = null, phonSink = null, phonQueue = Promise.resolve();
-async function phonInstance() {
-  if (!phonInst) {
-    const create = await phonemizer();
-    phonInst = create({
-      print: (line) => { lastPhon = line; if (phonSink) phonSink(line); },
-      printErr: (msg) => { if (/error/i.test(msg)) console.warn('espeak', msg); },
-      locateFile: (f) => base + 'piper/' + (f.endsWith('.wasm') ? 'piper_phonemize.wasm' : f.endsWith('.data') ? 'piper_phonemize.data' : f),
-    }).catch((e) => { phonInst = null; throw e; });
-  }
-  return phonInst;
-}
-function phonemeIds(text, voice) {
-  const job = phonQueue.then(async () => {
-    const m = await phonInstance();
-    let line = null;
-    phonSink = (l) => { if (line === null) line = l; };
-    try {
-      m.callMain(['-l', voice, '--input', JSON.stringify([{ text }]), '--espeak_data', '/espeak-ng-data']);
-    } finally { phonSink = null; }
-    if (line === null) throw new Error('Keine Lautschrift erhalten');
-    return JSON.parse(line);
+function ask(msg) {
+  return new Promise((resolve, reject) => {
+    const id = ++seq;
+    pending.set(id, { resolve, reject });
+    getWorker().postMessage({ ...msg, id });
   });
-  phonQueue = job.catch(() => {});
-  return job;
 }
 
 // ---------- Modelle laden und aufbewahren ----------
@@ -134,7 +108,7 @@ export async function install(id, onProgress = () => {}, signal = null) {
 }
 
 export async function remove(id) {
-  if (loaded && loaded.id === id) loaded = null;
+  if (worker) ask({ type: 'drop', voice: id }).catch(() => {}); // Speicher im Worker freigeben (nicht warten)
   try {
     const c = await caches.open(CACHE);
     await c.delete('/voices/' + id + '.onnx');
@@ -144,61 +118,33 @@ export async function remove(id) {
 
 // ---------- Sprechen ----------
 
-let loaded = null; // { id, session, cfg }
-async function load(id) {
-  if (loaded && loaded.id === id) return loaded;
-  const ort = await loadOrt();
-  const m = await cached(id, '.onnx'), j = await cached(id, '.onnx.json');
-  if (!m || !j) throw new Error('Stimme ist nicht geladen');
-  const cfg = await j.json();
-  const session = await ort.InferenceSession.create(new Uint8Array(await m.arrayBuffer()), { executionProviders: ['wasm'] });
-  loaded = { id, session, cfg, ort };
-  return loaded;
-}
-
-// Lautschrift → Nummern nach der Tabelle des Modells (wie piper: ^ Laut _ Laut _ … $)
-function idsFor(ph, cfg) {
-  const map = cfg.phoneme_id_map;
-  const phonemes = ph.phonemes || ph.phoneme_list;
-  if (!map || !phonemes) return ph.phoneme_ids;
-  const flat = Array.isArray(phonemes[0]) ? phonemes.flat() : [...(Array.isArray(phonemes) ? phonemes.join('') : phonemes)];
-  const id = (c) => (map[c] ? map[c][0] : null);
-  const out = [id('^') ?? 1];
-  const pad = id('_') ?? 0;
-  for (const c of flat) {
-    const v = id(c);
-    if (v == null) continue;
-    out.push(v, pad);
-  }
-  out.push(id('$') ?? 2);
-  return out;
-}
-
-// Text → { samples: Float32Array, rate }
-// rate: Sprechtempo (1 = normal); längere Pausen nach Satzzeichen erzeugt das Modell selbst
+// Text → { samples: Float32Array, rate } (berechnet im Worker)
 export async function synthesize(id, text, { rate = 1 } = {}) {
-  const { session, cfg, ort } = await load(id);
-  const ph = await phonemeIds(text, (cfg.espeak && cfg.espeak.voice) || 'de');
-  const ids = idsFor(ph, cfg);
-  const inf = cfg.inference || {};
-  const feeds = {
-    input: new ort.Tensor('int64', BigInt64Array.from(ids.map(BigInt)), [1, ids.length]),
-    input_lengths: new ort.Tensor('int64', BigInt64Array.from([BigInt(ids.length)]), [1]),
-    scales: new ort.Tensor('float32', Float32Array.from([inf.noise_scale ?? 0.667, (inf.length_scale ?? 1) / rate, inf.noise_w ?? 0.8]), [3]),
-  };
-  if (cfg.num_speakers > 1) feeds.sid = new ort.Tensor('int64', BigInt64Array.from([0n]), [1]);
-  const out = await session.run(feeds);
-  return { samples: out.output.data, rate: (cfg.audio && cfg.audio.sample_rate) || 22050 };
+  const r = await ask({ type: 'synth', voice: id, text, rate });
+  return { samples: r.samples, rate: r.rate };
 }
 
 // Wiedergabe über die Web-Audio-API. Auf dem iPhone als „Wiedergabe“ anmelden, damit der
 // Stummschalter nicht stumm schaltet (Safari 17+).
-let ctx = null;
+// Muss direkt in der Tipp-Geste aufgerufen werden (iOS gibt Ton sonst nicht frei);
+// ohne await davor. Teilt sich den AudioContext über window.__obAudio.
+export function unlockAudio() {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'playback';
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    if (!window.__obAudio) window.__obAudio = new AC();
+    const ac = window.__obAudio;
+    if (ac.state !== 'running') ac.resume().catch(() => {});
+    // kurzer stiller Ton „entsperrt“ die Wiedergabe auf iOS
+    const b = ac.createBuffer(1, 1, 22050);
+    const src = ac.createBufferSource();
+    src.buffer = b; src.connect(ac.destination); src.start(0);
+    return ac;
+  } catch (e) { return null; }
+}
 export function audioContext() {
-  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* */ }
-  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-  return ctx;
+  return window.__obAudio || unlockAudio();
 }
 
 // Spielt Samples ab → { stop(), done: Promise<boolean (true = zu Ende gespielt)>, duration }
