@@ -15,7 +15,7 @@ const SECTION_PAGES = 25; // Buchseiten je gerendertem Abschnitt (hält das Layo
 const CHARS_PER_MIN = 1300; // ca. 230 Wörter/Minute
 
 const DEFAULTS = {
-  fontSize: 19, font: 'literata', lineHeight: 1.55, margin: 'm', align: 'justify', theme: 'paper', mode: 'text', footer: 'page', paraStyle: 'auto',
+  fontSize: 19, font: 'literata', lineHeight: 1.55, margin: 'm', align: 'justify', theme: 'paper', mode: 'text', footer: 'page', paraStyle: 'auto', turn: 'book',
 };
 const FONTS = {
   literata: { label: 'Literata', css: '"Literata", Georgia, "Times New Roman", serif' },
@@ -23,7 +23,7 @@ const FONTS = {
   sans: { label: 'Sans', css: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' },
   dyslexic: { label: 'Weit', css: 'Verdana, "Atkinson Hyperlegible", Tahoma, sans-serif' },
 };
-const THEMES = { white: 'Weiß', paper: 'Papier', sepia: 'Sepia', dark: 'Dunkel', black: 'Schwarz' };
+const THEMES = { white: 'Weiß', paper: 'Papier', book: 'Buch', sepia: 'Sepia', dark: 'Dunkel', black: 'Schwarz' };
 const MARGINS = { s: 16, m: 28, l: 48 };
 
 // Leseeinstellungen gehören zum aktiven Profil (und werden mit ihm synchronisiert)
@@ -85,7 +85,8 @@ export async function openReader(root, bookId, { listen = false } = {}) {
   const ribbon = h('div', { class: 'r-ribbon', hidden: true });
   const footLeft = h('button', { class: 'r-foot-btn', onClick: (e) => { e.stopPropagation(); cycleFooter(); } });
   const footRight = h('span', { class: 'r-foot-pct' });
-  const footer = h('div', { class: 'r-footer' }, footLeft, footRight);
+  const chapBar = h('div', { class: 'r-chapbar', 'aria-hidden': 'true' }, h('div', {}));
+  const footer = h('div', { class: 'r-footer' }, footLeft, footRight, chapBar);
   const header = h('div', { class: 'r-header' }, h('span', {}, book.title));
 
   const slider = h('input', { type: 'range', min: 0, max: 1000, value: 0, class: 'r-slider', 'aria-label': 'Position im Buch' });
@@ -274,9 +275,19 @@ export async function openReader(root, bookId, { listen = false } = {}) {
 
   let locateTimer = null;
   function showScreen(n, animate = false) {
+    const from = screen;
     screen = Math.max(0, Math.min(screens - 1, n));
-    content.style.transition = animate ? 'transform 180ms ease-out' : 'none';
+    const turn = settings.turn || 'book';
+    if (animate && turn === 'none') animate = false;
+    content.style.transition = animate ? (turn === 'book' ? 'transform 300ms cubic-bezier(.3,.7,.2,1)' : 'transform 180ms ease-out') : 'none';
     content.style.transform = `translateX(${-screen * step}px)`;
+    // „Buch“: Schatten der umgeblätterten Seite wandert über den Bildschirm
+    if (animate && turn === 'book' && screen !== from) {
+      const sh = h('div', { class: 'r-turn ' + (screen > from ? 'fwd' : 'back') });
+      viewport.append(sh);
+      setTimeout(() => sh.remove(), 360);
+    }
+    updateChapterBar();
     // Während der Animation stimmen Bildschirmkoordinaten nicht → danach messen
     clearTimeout(locateTimer);
     if (animate) locateTimer = setTimeout(updatePositionFromScreen, 200);
@@ -478,11 +489,23 @@ export async function openReader(root, bookId, { listen = false } = {}) {
     }
   }
 
+  // Dünne Linie unten: Fortschritt im aktuellen Kapitel
+  function updateChapterBar() {
+    if (!pos || !toc.length || settings.mode !== 'text') { chapBar.hidden = true; return; }
+    const fi = flowIndexFor(pos);
+    let a = 0, b = totalChars;
+    for (const t of toc) { if (t.fi <= fi) a = cum[t.fi]; else { b = cum[t.fi]; break; } }
+    const g = cum[fi] + (pos.char || 0);
+    chapBar.hidden = false;
+    chapBar.firstChild.style.width = Math.round(Math.max(0, Math.min(1, (g - a) / Math.max(1, b - a))) * 100) + '%';
+  }
+
   // ---------- Fußzeile ----------
   function updateFooter() {
     if (!pos) return;
     const pct = Math.round((pos.ratio || 0) * 100);
     footRight.textContent = `${pct} %`;
+    updateChapterBar();
     const pi = pos.pageIndex ?? 0;
     const left = (1 - (pos.ratio || 0)) * totalChars / CHARS_PER_MIN;
     const leftTxt = left < 1 ? 'weniger als 1 Min.' : left < 60 ? `${Math.round(left)} Min.` : `${Math.floor(left / 60)} Std. ${Math.round(left % 60)} Min.`;
@@ -778,6 +801,7 @@ export async function openReader(root, bookId, { listen = false } = {}) {
       h('strong', {}, 'Ränder'), seg('margin', { s: 'Schmal', m: 'Normal', l: 'Breit' }),
       h('strong', {}, 'Ausrichtung'), seg('align', { justify: 'Blocksatz', left: 'Linksbündig' }),
       h('strong', {}, 'Absätze'), seg('paraStyle', { auto: 'Automatisch', indent: 'Einzug', space: 'Abstand' }),
+      h('strong', {}, 'Umblättern'), seg('turn', { book: 'Wie ein Buch', slide: 'Schieben', none: 'Sofort' }),
       h('label', { class: 'switch-row' }, h('span', {}, h('strong', {}, 'Zwei Spalten im Querformat'), h('br'), h('span', { class: 'muted small' }, 'Auf dem Tablet wie ein aufgeschlagenes Buch')),
         h('input', { type: 'checkbox', checked: settings.spread !== false, onChange: (e) => { settings.spread = e.target.checked; saveSettings(settings); relayout(); } })),
     ));
