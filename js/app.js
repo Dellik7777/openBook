@@ -421,6 +421,7 @@ async function chooseCover({ camera = false } = {}) {
   const quad = await openCornerEditor(f, detect(), { autoDetect: async () => detect(), title: 'Cover zuschneiden', okLabel: 'Als Cover übernehmen', hint: 'Ziehe die vier Ecken auf die Ecken des Covers.' });
   if (bmp && bmp.close) bmp.close();
   if (!quad) return null;
+  toast('Cover wird übernommen …', 1500);
   return processCover(f, quad);
 }
 function coverButtons(onPick) {
@@ -784,7 +785,8 @@ async function renderBook(bookId) {
     const errs = pages.filter((p) => p.ocrStatus === 'error').length;
     const words = pages.reduce((s, p) => s + (p.text ? p.text.split(/\s+/).length : 0), 0);
     head.replaceChildren(
-      coverEl(book, pool, 'large'),
+      h('button', { class: 'cover-edit-btn', 'aria-label': 'Cover ändern', title: 'Cover ändern', onClick: () => changeCover() },
+        coverEl(book, pool, 'large'), h('span', { class: 'cover-edit-badge' }, icon('images'), 'Cover')),
       h('div', { class: 'book-meta' },
         h('h1', {}, book.title),
         book.author ? h('p', { class: 'author' }, book.author) : null,
@@ -1002,6 +1004,22 @@ async function renderBook(bookId) {
       status,
     ));
     void s;
+  }
+
+  // Cover direkt aus der Buchansicht ändern (Antippen des Covers)
+  function changeCover() {
+    const save = async (c) => { s.close(); await db.updateBook(bookId, { cover: c }); toast(c ? 'Cover gespeichert' : 'Cover entfernt'); fillHead(); };
+    const s = sheet('Cover ändern', h('div', { class: 'menu' },
+      h('button', { class: 'menu-item', onClick: async () => { const c = await chooseCover(); if (c) save(c); } }, icon('images'), 'Aus Fotos wählen'),
+      h('button', { class: 'menu-item', onClick: async () => { const c = await chooseCover({ camera: true }); if (c) save(c); } }, icon('camera'), 'Fotografieren'),
+      h('button', { class: 'menu-item', onClick: async () => {
+        const pages = await db.getPagesMeta(bookId);
+        const first = pages.find((p) => p.image);
+        if (!first) { toast('Auf diesem Gerät gibt es keine Seitenfotos'); return; }
+        save(await processCover(first.image));
+      } }, icon('book'), 'Erste Seite als Cover'),
+      book.cover ? h('button', { class: 'menu-item danger', onClick: () => save(null) }, icon('trash'), 'Cover entfernen') : null,
+    ));
   }
 
   async function editMeta() {
