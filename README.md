@@ -26,7 +26,9 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Gewölbte Zeilen werden gerade gezogen**, bevor der Text erkannt wird (sonst hält die Erkennung gebogene Zeilen für zwei Spalten)
 - **Initialen** (großer Anfangsbuchstabe am Kapitelanfang) werden erkannt und vor das Wort gesetzt
 - Läuft im Hintergrund weiter, während du scannst; wird nach einem Neustart fortgesetzt
-- Repariert Silbentrennung am Zeilenende, entfernt Seitenzahlen und Kolumnentitel und verbindet Absätze über Seitengrenzen
+- Repariert Silbentrennung am Zeilenende (auch wenn die Hälften unterschiedlich formatiert erkannt wurden), entfernt Seitenzahlen und Kolumnentitel und verbindet Absätze über Seitengrenzen
+- **Satzzeichen-Korrektur:** als Komma gelesene Punkte (Absatzende, vor „Die“, „Er“ …), abgetrennte oder falsche Anführungszeichen (»…« einheitlich), Störzeichen von Papierfasern
+- **Lokaler Schwellwert (Sauvola)** statt eines Werts für die ganze Seite; Schattenkeile am Bund werden vor der Erkennung entfernt. Kleine, allein stehende Seitenzahlen werden notfalls in einem zweiten Durchgang unter/über dem Text gesucht
 - **Erhält die Formatierung:** Überschriften, Aufzählungen mit Ebenen, nummerierte Listen, **fett** und *kursiv* (eigene Bildanalyse von Strichstärke und Schräglage)
 - **Schatten-Entfernung:** Schatten von Hand oder Handy, Falten und ungleichmäßiges Licht werden vor der Erkennung herausgerechnet
 - **Tabellen** werden als echte Tabellen erkannt (Spalten aus der Lage der Wörter, Kopfzeile)

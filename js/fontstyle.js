@@ -98,6 +98,22 @@ function slantAngle(img, x0, y0, x1, y1) {
   return { a: (den ? num / den : best) * 2 - 36, n: total, dom: den / Math.max(1, upright) };
 }
 
+function uprightAngle(angles) {
+  if (!angles.length) return 0;
+  const med = angles[Math.floor(angles.length / 2)];
+  if (angles.length < 12) return med;
+  let lo = angles[Math.floor(angles.length * 0.1)], hi = angles[Math.floor(angles.length * 0.9)];
+  let nLo = 0, nHi = 0;
+  for (let it = 0; it < 12; it++) {
+    let sL = 0, sH = 0; nLo = 0; nHi = 0;
+    for (const a of angles) { if (Math.abs(a - lo) <= Math.abs(a - hi)) { sL += a; nLo++; } else { sH += a; nHi++; } }
+    if (!nLo || !nHi) return med;
+    lo = sL / nLo; hi = sH / nHi;
+  }
+  const share = Math.min(nLo, nHi) / angles.length;
+  return hi - lo > 6 && share > 0.12 ? lo : med;
+}
+
 // Vorzeichen der Neigung von Kursivschrift (gemessen an Testseiten)
 const ITALIC_SIGN = 1;
 
@@ -126,8 +142,10 @@ export function detectStyles(img, words, scale = 1, debug = null) {
   m.forEach((x) => { if (x && x.letters >= 3) { if (!byLine.has(x.lineId)) byLine.set(x.lineId, []); byLine.get(x.lineId).push(x.stroke); } });
   const lineMed = new Map([...byLine].map(([k, v]) => [k, v.sort((a, b) => a - b)[Math.floor(v.length / 2)]]));
   // Typische Schräglage der Seite (gleicht schief fotografierte Seiten aus)
+  // Ist ein großer Teil der Seite kursiv (z. B. ein Brief), liegt der Median zwischen beiden
+  // Gruppen → zwei Gruppen bilden und die aufrechte (weniger geneigte) als Maßstab nehmen
   const angles = m.filter((x) => x && x.italic).map((x) => x.italic.a).sort((a, b) => a - b);
-  const medA = angles.length ? angles[Math.floor(angles.length / 2)] : 0;
+  const medA = uprightAngle(angles);
   words.forEach((wd, i) => {
     const x = m[i];
     wd.bold = false; wd.italic = false;
@@ -137,9 +155,18 @@ export function detectStyles(img, words, scale = 1, debug = null) {
     if (x.caps) wd.bold = r > 1.6;                          // Großbuchstaben wirken von Natur aus kräftiger
     else wd.bold = r > 1.5 || (r > 1.38 && x.letters >= 5) || (rl > 1.28 && r > 1.15 && x.letters >= 3);
     const dA = x.italic ? x.italic.a - medA : 0;
-    wd.italic = !!(x.italic && Math.abs(dA) > 6 && Math.sign(dA) === ITALIC_SIGN && x.italic.dom > 3);
+    wd.italic = !!(x.italic && Math.abs(dA) > 6 && Math.sign(dA) === ITALIC_SIGN && x.italic.dom > (x.letters >= 4 ? 1.25 : 1.6));
     if (debug) debug.push({ t: wd.text, st: +r.toFixed(2), rl: +rl.toFixed(2), a: x.italic && +dA.toFixed(1), dom: x.italic && +x.italic.dom.toFixed(2), b: wd.bold, i: wd.italic });
   });
+  // Kursive Wortgruppen sind zusammenhängend: ein leicht geneigtes Wort zwischen zwei kursiven
+  // Nachbarn (auch über das Zeilenende hinweg) gehört dazu
+  for (let i = 1; i < words.length - 1; i++) {
+    const wd = words[i];
+    if (wd.italic || !words[i - 1].italic || !words[i + 1].italic) continue;
+    const x = m[i];
+    const dA = x && x.italic ? x.italic.a - medA : null;
+    if (dA === null || dA > 2) wd.italic = true;
+  }
   // Einzelne kurze Wörter zwischen gleich formatierten Nachbarn angleichen (z. B. „in“, „-“)
   for (let i = 1; i < words.length - 1; i++) {
     const a = words[i - 1], c = words[i + 1], wd = words[i];
