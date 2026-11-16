@@ -841,3 +841,25 @@ html.locked #app { visibility: hidden; }
 /* Kapitelfortschritt */
 .r-chapbar { position: absolute; left: 20px; right: 20px; bottom: 2px; height: 2px; border-radius: 1px; background: color-mix(in srgb, var(--r-muted) 22%, transparent); overflow: hidden; }
 .r-chapbar > div { height: 100%; background: color-mix(in srgb, #F28C28 75%, transparent); transition: width .3s; }
+
+/* Scan 3.0: Bestätigung im Bild */
+.scan-badge { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); z-index: 6; padding: 14px 26px; border-radius: 40px; background: rgba(32, 140, 80, .92); color: #fff; font: 700 30px var(--font-ui); box-shadow: 0 10px 30px rgba(0,0,0,.35); pointer-events: none; white-space: nowrap; }
+.scan-badge.bad { background: rgba(200, 60, 40, .92); font-size: 22px; }
+.scan-badge.pop { animation: badge-pop 1.8s ease-out forwards; }
+@keyframes badge-pop { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.7); } 12% { opacity: 1; transform: translate(-50%, -50%) scale(1.06); } 20% { transform: translate(-50%, -50%) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
+
+/* Scan 3.0: Fertig-Prüfung */
+.finish-check { position: absolute; inset: 0; z-index: 20; background: var(--bg, #f4f5f8); color: var(--ink, #1d2433); overflow-y: auto; padding: calc(var(--safe-top, 0px) + 12px) 16px calc(var(--safe-bottom, 0px) + 20px); animation: ap-in .22s ease-out; }
+.finish-head { display: flex; align-items: center; justify-content: space-between; max-width: 640px; margin: 0 auto 8px; }
+.finish-head h2 { margin: 0; font: 700 22px var(--font-ui); }
+.finish-head .icon-btn { color: inherit; }
+.finish-body { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.finish-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: 10px; background: var(--surface, #fff); border: 1px solid var(--line); }
+.finish-row > .grow { min-width: 180px; }
+.finish-icon { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font: 700 16px var(--font-ui); color: #fff; }
+.finish-row.ok .finish-icon { background: #208c50; }
+.finish-row.warn .finish-icon { background: #F28C28; }
+.finish-hero { text-align: center; padding: 10px 0 4px; }
+.finish-big { width: 84px; height: 84px; margin: 0 auto 6px; border-radius: 50%; background: #208c50; color: #fff; display: grid; place-items: center; font: 700 44px var(--font-ui); box-shadow: 0 10px 30px rgba(32,140,80,.35); }
+.finish-hero h3 { margin: 4px 0; font: 700 20px var(--font-ui); }
+.finish-actions { margin-top: 6px; }

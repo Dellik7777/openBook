@@ -468,16 +468,24 @@ export function analyzeFrame(src) {
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(src, 0, 0, w, h);
   const d = ctx.getImageData(0, 0, w, h).data;
-  const q = det ? det.quad.map(([x, y]) => [x * S, y * S]) : [[0, 0], [w, 0], [w, h], [0, h]];
+  // Viereck etwas vergrößern: Ein Finger auf dem Seitenrand gehört nicht zur Papierfläche
+  // und schneidet eine Kerbe in die erkannte Seite
+  let q = det ? det.quad.map(([x, y]) => [x * S, y * S]) : [[0, 0], [w, 0], [w, h], [0, h]];
+  if (det) {
+    const cx = q.reduce((a, p) => a + p[0], 0) / 4, cy = q.reduce((a, p) => a + p[1], 0) / 4;
+    q = q.map(([x, y]) => [cx + (x - cx) * 1.1, cy + (y - cy) * 1.1]);
+  }
   const xs = q.map((p) => p[0]), ys = q.map((p) => p[1]);
   const bx0 = Math.min(...xs), bx1 = Math.max(...xs), by0 = Math.min(...ys), by1 = Math.max(...ys);
   const band = 0.16;
-  let skin = 0, total = 0;
+  let skin = 0, total = 0, area = 0;
   for (let y = Math.max(0, Math.floor(by0)); y < Math.min(h, by1); y++) {
     for (let x = Math.max(0, Math.floor(bx0)); x < Math.min(w, bx1); x++) {
       const fx = (x - bx0) / Math.max(1, bx1 - bx0), fy = (y - by0) / Math.max(1, by1 - by0);
-      if (fx > band && fx < 1 - band && fy > band && fy < 1 - band) continue; // nur Randstreifen
+      const inner = fx > band && fx < 1 - band && fy > band && fy < 1 - band;
       if (!inQuad(q, x, y)) continue;
+      area++;
+      if (inner) continue; // nur Randstreifen
       total++;
       const i = (y * w + x) * 4, r = d[i], g = d[i + 1], b = d[i + 2];
       const Y = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -486,6 +494,7 @@ export function analyzeFrame(src) {
       if (Y > 50 && cr >= 145 && cr <= 180 && cb >= 77 && cb <= 127 && cr - cb >= 28) skin++;
     }
   }
-  const finger = total > 50 && skin / total > 0.025;
+  // Ein Finger bedeckt meist 0,5–3 % der Seite; Papier ist kaum rötlich
+  const finger = total > 50 && skin >= 20 && skin / Math.max(1, area) > 0.005;
   return { spread, cut, finger, quad: det ? det.quad : null };
 }

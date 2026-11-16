@@ -836,8 +836,8 @@ async function renderBook(bookId) {
     proofCard.hidden = false;
     proofCard.className = 'card issues proof-card';
     const parts = [];
-    if (auto) parts.push(`${auto} eindeutige Lesefehler (werden automatisch korrigiert)`);
-    if (rev) parts.push(`${rev} zweifelhafte Wörter zum Ansehen`);
+    if (auto) parts.push(auto === 1 ? '1 eindeutiger Lesefehler (wird automatisch korrigiert)' : `${auto} eindeutige Lesefehler (werden automatisch korrigiert)`);
+    if (rev) parts.push(rev === 1 ? '1 zweifelhaftes Wort zum Ansehen' : `${rev} zweifelhafte Wörter zum Ansehen`);
     proofCard.replaceChildren(h('div', { class: 'issue' },
       h('span', { class: 'grow' }, h('strong', {}, 'Textprüfung: '), parts.join(', ') + '.'),
       h('button', { class: 'btn small primary', onClick: () => go('#/pruefen/' + bookId) }, icon('check'), 'Prüfen')));
