@@ -7,7 +7,7 @@ import { h, icon, iconButton, toast } from './ui.js';
 
 const FULL = () => [[0, 0], [1, 0], [1, 1], [0, 1]];
 
-export function openCornerEditor(source, quad, { autoDetect = null, title = 'Ecken anpassen', okLabel = 'Übernehmen' } = {}) {
+export function openCornerEditor(source, quad, { autoDetect = null, title = 'Ecken anpassen', okLabel = 'Übernehmen', hint = 'Ziehe die vier Ecken auf die Ecken der Seite.' } = {}) {
   return new Promise((resolve) => {
     let q = (quad && quad.length === 4 ? quad : FULL()).map((p) => [...p]);
     let url = null, img = null, bitmap = null;
@@ -38,7 +38,7 @@ export function openCornerEditor(source, quad, { autoDetect = null, title = 'Eck
     const ov = h('div', { class: 'corner-editor', role: 'dialog', 'aria-label': title },
       h('div', { class: 'ce-bar' }, iconButton('close', 'Abbrechen', () => done(null)), h('div', { class: 'grow ce-title' }, title)),
       stage,
-      h('p', { class: 'ce-hint' }, 'Ziehe die vier Ecken auf die Ecken der Seite.'),
+      h('p', { class: 'ce-hint' }, hint),
       h('div', { class: 'ce-actions' },
         autoDetect ? h('button', { class: 'btn small', onClick: async () => {
           const d = await autoDetect();

@@ -1,6 +1,6 @@
 // Versionsnummer der App (bei jeder Veröffentlichung anpassen, zusammen mit VERSION in sw.js)
-export const VERSION = '3.0';
-export const BUILD = 'v30';
+export const VERSION = '3.0.1';
+export const BUILD = 'v31';
 export const DATE = '2026-11-17';
 
 // Kurzfassung für den Hinweis nach einem Update
@@ -8,6 +8,9 @@ export const HEADLINE = 'Scan 3.0: einfach umblättern – Lesepixel fotografier
 
 // „Was ist neu“ – neueste Version zuerst
 export const NOTES = [
+  ['3.0.1', [
+    'Cover aus der Fotomediathek wählen oder fotografieren – mit automatischem Zuschnitt (Buch wird vom Hintergrund getrennt und gerade gerückt)',
+  ]],
   ['3.0', [
     'Blättermodus: Handy ruhig halten und einfach umblättern – jede neue Seite wird automatisch fotografiert',
     'Einzel- und Doppelseiten werden automatisch erkannt und geteilt',

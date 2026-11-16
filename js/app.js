@@ -403,6 +403,32 @@ async function tagEditor(initial) {
   return el;
 }
 
+// ---------- Cover wählen ----------
+
+// Foto aufnehmen oder aus der Fotomediathek wählen, dann zuschneiden (Ecken des Buchs)
+// → Blob oder null (abgebrochen)
+async function chooseCover({ camera = false } = {}) {
+  const [f] = await pickFiles({ multiple: false, capture: camera ? 'environment' : null });
+  if (!f) return null;
+  const { openCornerEditor } = await import('./corners.js');
+  const { detectPage, detectObject } = await import('./pagedetect.js');
+  const bmp = await createImageBitmap(f).catch(() => null);
+  const detect = () => {
+    if (!bmp) return null;
+    // Cover sind oft dunkel oder bunt: erst als Gegenstand vor dem Hintergrund, sonst wie eine Seite
+    try { const d = detectObject(bmp) || detectPage(bmp); return d ? d.quad.map(([x, y]) => [x / bmp.width, y / bmp.height]) : null; } catch (e) { return null; }
+  };
+  const quad = await openCornerEditor(f, detect(), { autoDetect: async () => detect(), title: 'Cover zuschneiden', okLabel: 'Als Cover übernehmen', hint: 'Ziehe die vier Ecken auf die Ecken des Covers.' });
+  if (bmp && bmp.close) bmp.close();
+  if (!quad) return null;
+  return processCover(f, quad);
+}
+function coverButtons(onPick) {
+  return h('div', { class: 'row gap-s wrap' },
+    h('button', { type: 'button', class: 'btn small', onClick: async () => { const c = await chooseCover({ camera: true }); if (c) onPick(c); } }, icon('camera'), 'Fotografieren'),
+    h('button', { type: 'button', class: 'btn small', onClick: async () => { const c = await chooseCover(); if (c) onPick(c); } }, icon('images'), 'Aus Fotos wählen'));
+}
+
 // ---------- Weiterlesen ----------
 
 // Großes aktuelles Buch oben in der Bibliothek: Cover, Fortschritt, Restzeit im Kapitel
@@ -600,13 +626,9 @@ function newBookDialog(folderId = null) {
   const pool = new UrlPool();
   const title = h('input', { class: 'input', placeholder: 'Titel', required: true, autocomplete: 'off' });
   const author = h('input', { class: 'input', placeholder: 'Autor:in (optional)', autocomplete: 'off' });
-  const preview = h('div', { class: 'cover-pick' }, icon('camera'), h('span', {}, 'Cover fotografieren (optional)'));
-  const pickCover = async () => {
-    const [f] = await pickFiles({ multiple: false, capture: 'environment' });
-    if (!f) return;
-    coverBlob = await processCover(f);
-    preview.replaceChildren(h('img', { src: pool.get(coverBlob), alt: 'Cover' }));
-  };
+  const preview = h('div', { class: 'cover-pick' }, icon('camera'), h('span', {}, 'Cover (optional)'));
+  const setCover = (b) => { coverBlob = b; preview.replaceChildren(h('img', { src: pool.get(coverBlob), alt: 'Cover' })); };
+  const pickCover = async () => { const c = await chooseCover(); if (c) setCover(c); };
   const isbnInfo = h('p', { class: 'muted small', hidden: true });
   const scanIsbnBtn = async () => {
     const { scanIsbn, lookupIsbn } = await import('./isbn.js');
@@ -640,7 +662,8 @@ function newBookDialog(folderId = null) {
       h('button', { type: 'button', class: 'btn small', onClick: () => { s.close(); importDialog(folderId); } }, icon('fileIn'), 'PDF/EPUB importieren'),
     ),
     isbnInfo,
-    h('button', { type: 'button', class: 'cover-pick-btn', onClick: pickCover }, preview),
+    h('button', { type: 'button', class: 'cover-pick-btn', 'aria-label': 'Cover aus Fotos wählen', onClick: pickCover }, preview),
+    coverButtons(setCover),
     title, author,
     h('button', { class: 'btn primary block', type: 'submit' }, icon('camera'), 'Anlegen & Seiten scannen'),
     h('p', { class: 'muted small' }, 'ISBN scannen sucht Titel, Autor und Cover online (es wird nur die ISBN an Open Library, die Deutsche Nationalbibliothek, lobid und Google Books gesendet).'),
@@ -988,7 +1011,7 @@ async function renderBook(bookId) {
     const author = h('input', { class: 'input', value: book.author || '', placeholder: 'Autor:in' });
     const isbnIn = h('input', { class: 'input', value: book.isbn || '', placeholder: 'ISBN (optional)', inputmode: 'numeric' });
     const prev = h('div', { class: 'cover-pick' });
-    const showPrev = () => prev.replaceChildren(cover ? h('img', { src: p2.get(cover), alt: '' }) : h('span', {}, icon('camera'), ' Cover fotografieren'));
+    const showPrev = () => prev.replaceChildren(cover ? h('img', { src: p2.get(cover), alt: '' }) : h('span', {}, icon('images'), ' Cover wählen'));
     showPrev();
     const folderSel = await folderOptions(book.folderId);
     const tagsEl = await tagEditor(book.tags);
@@ -1009,10 +1032,11 @@ async function renderBook(bookId) {
       s.close();
       if (lockBox) { await lock.reconcile(); if (lockBox.checked && lock.vaultReady()) toast('Buch gesperrt und verschlüsselt'); }
     } },
-      h('button', { type: 'button', class: 'cover-pick-btn', onClick: async () => {
-        const [f] = await pickFiles({ multiple: false, capture: 'environment' });
-        if (f) { cover = await processCover(f); showPrev(); }
+      h('button', { type: 'button', class: 'cover-pick-btn', 'aria-label': 'Cover aus Fotos wählen', onClick: async () => {
+        const c = await chooseCover();
+        if (c) { cover = c; showPrev(); }
       } }, prev),
+      coverButtons((c) => { cover = c; showPrev(); }),
       h('div', { class: 'row gap-s' },
         h('button', { type: 'button', class: 'btn small', onClick: async () => {
           const pages = await db.getPagesMeta(bookId);
