@@ -58,7 +58,7 @@ function fixPunctuation(words, ends, quotes = null) {
   const single = words.some((w) => /[‘']/.test(w.text));
   for (const w of words) {
     w.text = w.text.replace(/([\p{L}\d][.!?:])[,;]+$/u, '$1');
-    if (!single) w.text = w.text.replace(/^‚(?=\p{Ll})/u, '');
+    if (!single) w.text = w.text.replace(/^‚(?=\p{Ll}|[»«„“])/u, '');
   }
   if (quotes) fixQuotes(words, ends, quotes);
   for (let i = 0; i < words.length; i++) {
