@@ -1071,6 +1071,7 @@ export async function openReader(root, bookId) {
         const prog = h('div', { class: 'progress', hidden: true }, h('div', { style: { width: '0%' } }));
         const row = h('div', { class: 'own-voice' });
         const choose = async () => {
+          unlockAudio(); // noch in der Tipp-Geste (iOS)
           if (!have.has(id)) {
             if (!navigator.onLine) { toast('Zum Laden der Stimme ist Internet nötig'); return; }
             prog.hidden = false; status.textContent = '0 %';
@@ -1145,7 +1146,8 @@ export async function openReader(root, bookId) {
       if (fi >= flow.length) return null;
       const f = flow[fi];
       const text = f.figure ? 'Abbildung: ' + f.caption : f.text;
-      const max = engineIsPiper() ? 180 : 280;
+      // eigene Stimme: kurze Stücke, das erste besonders kurz (schneller Start)
+      const max = engineIsPiper() ? (piperFirst ? 90 : 160) : 280;
       let end = Math.min(text.length, char + max);
       if (end < text.length) {
         const sub = text.slice(char, end);
@@ -1189,9 +1191,23 @@ export async function openReader(root, bookId) {
     }
 
     // ---- Eigene Stimme (Piper, läuft auf dem Gerät) ----
-    let piperMod = null, piperGen = 0, piperPlay = null, piperTick = null;
+    let piperMod = null, piperGen = 0, piperPlay = null, piperTick = null, piperFirst = false;
     const piperCache = new Map(); // key → Promise<audio>
     const piperId = () => (settings.ttsVoice || '').slice(6);
+    // Ton auf iOS freigeben – synchron im Tipp-Handler, gleicher AudioContext wie piper.js
+    function unlockAudio() {
+      try {
+        if (navigator.audioSession) navigator.audioSession.type = 'playback';
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        if (!window.__obAudio) window.__obAudio = new AC();
+        const ac = window.__obAudio;
+        if (ac.state !== 'running') ac.resume().catch(() => {});
+        const b = ac.createBuffer(1, 1, 22050);
+        const src = ac.createBufferSource();
+        src.buffer = b; src.connect(ac.destination); src.start(0);
+      } catch (e) { /* */ }
+    }
     function engineIsPiper() { return /^piper:/.test(settings.ttsVoice || ''); }
     async function piper() { if (!piperMod) piperMod = await import('./piper.js'); return piperMod; }
     function piperAudio(text) {
@@ -1209,10 +1225,15 @@ export async function openReader(root, bookId) {
     }
     async function speakPiper(piece, onWord, next) {
       const gen = ++piperGen;
+      const first = piperFirst;
+      piperFirst = false;
       let audio;
+      const slow = first ? setTimeout(() => { if (gen === piperGen) toast('Stimme wird vorbereitet …', 2500); }, 700) : null;
       try {
         audio = await piperAudio(piece);
+        clearTimeout(slow);
       } catch (e) {
+        clearTimeout(slow);
         console.warn('Eigene Stimme', e);
         if (gen !== piperGen) return;
         toast('Die eigene Stimme konnte nicht sprechen – es liest die Gerätestimme vor', 4000);
@@ -1225,7 +1246,11 @@ export async function openReader(root, bookId) {
       if (gen !== piperGen || !active) return;
       // nächstes Stück schon vorbereiten, damit keine Pause entsteht
       const pn = pieceAt(next);
-      if (pn) piperAudio(pn.piece).catch(() => {});
+      if (pn) {
+        piperAudio(pn.piece).catch(() => {});
+        const pn2 = pieceAt(pn.next);
+        if (pn2) piperAudio(pn2.piece).catch(() => {});
+      }
       const m = await piper();
       piperPlay = m.play(audio);
       const h0 = piperPlay;
@@ -1248,7 +1273,7 @@ export async function openReader(root, bookId) {
     }
     function play() {
       if (!synth && !engineIsPiper()) { toast('Vorlesen wird von diesem Browser nicht unterstützt'); return; }
-      if (engineIsPiper()) piper().then((m) => m.audioContext()); // muss in der Tipp-Geste starten (iOS)
+      if (engineIsPiper()) { piperFirst = true; unlockAudio(); } // muss in der Tipp-Geste passieren (iOS)
       if (settings.mode !== 'text') { switchModeTo('text', pos?.pageIndex ?? 0); }
       active = true;
       bar.hidden = false;
