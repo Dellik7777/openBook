@@ -2,7 +2,7 @@
 // App-Dateien: zuerst aus dem Cache, im Hintergrund aktualisieren.
 // OCR-Engine & Sprachdaten (groß, ändern sich nie): Cache zuerst.
 
-const VERSION = 'v17';
+const VERSION = 'v18';
 const SHELL = `openbook-shell-${VERSION}`;
 const VENDOR = 'openbook-vendor-v1';
 
@@ -48,6 +48,9 @@ const SHELL_FILES = [
   'js/vault.js',
   'js/dewarp.js',
   'js/corners.js',
+  'js/piper.js',
+  'js/proofread.js',
+  'js/proofview.js',
   'js/config.js',
   'js/sync/sync.js',
   'js/sync/oauth.js',
@@ -72,6 +75,7 @@ const VENDOR_FILES = [
   'vendor/jszip/jszip.min.js',
   'vendor/qr/qrcode.js',
   'vendor/qr/jsQR.js',
+  'vendor/wordlist/deu.txt',
 ];
 
 self.addEventListener('install', (e) => {

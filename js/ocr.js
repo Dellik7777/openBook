@@ -162,6 +162,8 @@ export async function recognizePage(worker, image, figures = []) {
   const { data } = await worker.recognize(input, {}, { blocks: true, text: true });
   if (dropCap) await applyDropCap(worker, canvas, dropCap, data);
   markStyles(data, gray);
+  // Das Wort mit der Initiale wirkt durch die große Initiale daneben fett – ist es aber nicht
+  for (const b of data.blocks || []) for (const pa of b.paragraphs || []) for (const l of pa.lines || []) for (const w of l.words || []) if (w.dropCap) { w.bold = false; w.italic = false; }
   const res = analyzeOcr(data, { height });
   if (res.printedNo == null && page) {
     try { res.printedNo = await findPageNumberZones(worker, page, data); } catch (e) { console.warn('Seitenzahl-Suche', e); }
@@ -375,6 +377,7 @@ async function applyDropCap(worker, capCanvas, dc, data) {
   if (!best) return;
   const w0 = best.line.words[0];
   w0.text = letter + w0.text;
+  w0.dropCap = true;
   best.line.text = letter + best.line.text;
   // Kapitelanfänge haben oft ungewöhnliche Wörter („Aufhööööören!“) → nicht als Rauschen verwerfen
   best.line.confidence = Math.max(best.line.confidence || 0, 70);

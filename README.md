@@ -27,6 +27,7 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Initialen** (großer Anfangsbuchstabe am Kapitelanfang) werden erkannt und vor das Wort gesetzt
 - Läuft im Hintergrund weiter, während du scannst; wird nach einem Neustart fortgesetzt
 - Repariert Silbentrennung am Zeilenende (auch wenn die Hälften unterschiedlich formatiert erkannt wurden), entfernt Seitenzahlen und Kolumnentitel und verbindet Absätze über Seitengrenzen
+- **Textprüfung fürs ganze Buch:** vergleicht jedes Wort mit dem Rest des Buchs und einer deutschen Wortliste. Eindeutige Lesefehler („Lindqyist“, wenn sonst überall „Lindqvist“ steht) werden automatisch korrigiert (rückgängig machbar), zweifelhafte Wörter erscheinen in einer Prüfliste mit Foto-Ausschnitt – statt jede Seite nachzulesen
 - **Satzzeichen-Korrektur:** als Komma gelesene Punkte (Absatzende, vor „Die“, „Er“ …), abgetrennte oder falsche Anführungszeichen (»…« einheitlich), Störzeichen von Papierfasern
 - **Lokaler Schwellwert (Sauvola)** statt eines Werts für die ganze Seite; Schattenkeile am Bund werden vor der Erkennung entfernt. Kleine, allein stehende Seitenzahlen werden notfalls in einem zweiten Durchgang unter/über dem Text gesucht
 - **Erhält die Formatierung:** Überschriften, Aufzählungen mit Ebenen, nummerierte Listen, **fett** und *kursiv* (eigene Bildanalyse von Strichstärke und Schräglage)
@@ -41,13 +42,13 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - Hintergründe: Weiß, Papier, Sepia, Dunkel, Schwarz
 - Fußzeile mit Buchseite und Prozent oder verbleibender Lesezeit (antippen zum Umschalten)
 - Lesezeichen, Volltextsuche, Seitenübersicht, Schieberegler
-- **Vorlesen** mit der Stimme des Geräts – blättert mit und hebt den Absatz hervor; **Stimmenauswahl mit Hörprobe** (beste Stimme „Premium“/„Erweitert“ wird automatisch gewählt, Anleitung zum Laden besserer Stimmen)
+- **Vorlesen** mit der Stimme des Geräts – blättert mit und hebt den Absatz hervor; **Stimmenauswahl mit Hörprobe**; zusätzlich **eigene natürliche Stimmen** (Piper „Thorsten“, „Kerstin“, „Ramona“), die einmal geladen werden und dann offline auf dem Gerät laufen – unabhängig davon, welche Stimmen der Browser freigibt
 - **Inhaltsverzeichnis** aus den erkannten Überschriften, „Noch X Min. im Kapitel“
 - **Markieren und Notizen** in vier Farben, Liste aller Markierungen, Export als Markdown
 - **Zwei Spalten im Querformat** auf dem Tablet
 - **Lesestatistik:** Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher – mit Sync über alle Geräte zusammengezählt
 - **Tagesziel** (z. B. 20 Minuten) mit Fortschritt in der Bibliothek
-- **Wort nachschlagen:** markieren → Wikipedia-Kurzartikel, Links zu Duden, DWDS, Wiktionary und DeepL
+- **Wort nachschlagen:** markieren → Wikipedia-Kurzartikel (bleibt gespeichert, auch offline abrufbar), **Fundstellen im Buch** (offline, z. B. „wer war noch mal Hollmann?“), Links zu Duden, DWDS, Wiktionary und DeepL
 - **Lernkarten aus Markierungen:** Lückentext oder Frage (Notiz mit „?“), Wiederholung nach dem Karteikasten-Prinzip
 - **Schlaf-Timer** beim Vorlesen (5–60 Minuten oder bis Kapitelende)
 - **Fußnoten antippen** zeigt den Fußnotentext, **Tabellen** werden als Tabellen dargestellt
@@ -77,7 +78,7 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Suche über alle Bücher** (Titel, Autor, Tags, Text) – ein Treffer öffnet den Leser an der Stelle
 - **App-Sperre mit Face ID / Touch ID** und PIN, wahlweise für die ganze App oder einzelne Bücher
 - **Gesperrte Bücher werden verschlüsselt** (AES-256-GCM): Texte, Fotos, Abbildungen, Markierungen und Lesezeichen liegen nur verschlüsselt im Speicher. Den Schlüssel öffnet die PIN – und Face ID, wenn das Gerät die WebAuthn-Erweiterung PRF kann (iOS 18, aktuelle Android-Geräte)
-- **Erinnerung an die Sicherung** und **Speicher sparen** (Fotos verkleinern oder löschen, Text bleibt)
+- **Erinnerung an die Sicherung** (entfällt bei Cloud-Abgleich mit Fotos), **Warnung im iPhone-Safari-Tab** (dort kann iOS nach 7 Tagen ohne Nutzung alles löschen – als Home-Bildschirm-App nicht) und **Speicher sparen** (Fotos verkleinern oder löschen, Text bleibt)
 - Unsicher erkannte Wörter werden im Editor zum Prüfen angeboten
 - Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen, Seitenzahl korrigieren, **Abbildungen markieren** (Beschriftungen in der Abbildung landen dann nicht im Lesetext)
 - **EPUB-Export**, z. B. für „Send to Kindle“, Apple Books oder Tolino

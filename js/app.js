@@ -54,6 +54,7 @@ const routes = [
   [/^#\/statistik$/, () => openStats(app)],
   [/^#\/lernen(?:\/([\w]+))?$/, async (m) => (await import('./cardsview.js')).openCards(app, m[1] || null)],
   [/^#\/page\/([\w]+)\/([\w]+)$/, (m) => openPageEditor(app, m[1], m[2])],
+  [/^#\/pruefen\/([\w]+)$/, async (m) => (await import('./proofview.js')).openProof(app, m[1])],
 ];
 
 async function route() {
@@ -398,9 +399,25 @@ async function tagEditor(initial) {
 }
 
 // Erinnerung an die Sicherung
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isInstalled = () => !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
 async function backupReminder() {
   const books = await db.getBooks();
   if (!books.length) return null;
+  // Dauerhaften Speicher anfragen (iPhone: wird als Home-Bildschirm-App gewährt)
+  db.requestPersistence();
+  // Safari löscht Daten von Websites, die 7 Tage nicht geöffnet wurden – außer bei Apps auf dem Home-Bildschirm
+  let hideIos = 0;
+  try { hideIos = +localStorage.getItem('ob.iosHint') || 0; } catch (e) { /* */ }
+  if (isIOS() && !isInstalled() && Date.now() > hideIos) {
+    const card = h('div', { class: 'card notice' },
+      h('strong', {}, 'Wichtig: Lesepixel zum Home-Bildschirm hinzufügen'),
+      h('p', { class: 'small' }, 'Im Safari-Tab kann iOS alle Bücher und Fotos löschen, wenn du die Seite 7 Tage nicht öffnest. Als App auf dem Home-Bildschirm passiert das nicht: in Safari auf „Teilen“ tippen → „Zum Home-Bildschirm“, dann Lesepixel von dort öffnen.'),
+      h('button', { class: 'btn small', onClick: () => { try { localStorage.setItem('ob.iosHint', String(Date.now() + 3 * 86400000)); } catch (e) { /* */ } card.remove(); } }, 'Später erinnern'));
+    return card;
+  }
+  // Mit Cloud-Abgleich samt Fotos ist alles doppelt vorhanden → keine Erinnerung nötig
+  if (sync.getProvider() && sync.photosEnabled()) return null;
   const last = (await db.getMeta('lastBackupAt', 0)) || 0;
   let snooze = 0;
   try { snooze = +localStorage.getItem('ob.backupSnooze') || 0; } catch (e) { /* */ }
@@ -626,6 +643,7 @@ async function renderBook(bookId) {
   const head = h('div', { class: 'book-head' });
   const pagesGrid = h('div', { class: 'pages-grid' });
   const issuesCard = h('div', { class: 'card issues', hidden: true });
+  const proofCard = h('div', { class: 'card issues proof-card', hidden: true });
 
   const view = h('div', { class: 'page book' },
     h('header', { class: 'topbar' },
@@ -641,6 +659,7 @@ async function renderBook(bookId) {
       ),
     ),
     issuesCard,
+    proofCard,
     pagesGrid,
   );
   app.append(view);
@@ -691,6 +710,7 @@ async function renderBook(bookId) {
     const figs = await db.getFiguresOfBook(bookId);
     figPages = new Set(figs.map((f) => f.pageId));
     renderIssues(pages);
+    renderProof(pages);
     pagesGrid.replaceChildren(...(pages.length ? pages.map((p, i) => pageTile(p, i)) : [
       h('p', { class: 'muted pad' }, 'Noch keine Seiten. Tippe auf „Seiten scannen“.'),
     ]));
@@ -726,6 +746,32 @@ async function renderBook(bookId) {
         ),
       )),
     );
+  }
+
+  // Textprüfung: wahrscheinliche Lesefehler im ganzen Buch zählen
+  let proofRun = 0;
+  async function renderProof(pages) {
+    const run = ++proofRun;
+    const done = pages.filter((p) => p.ocrStatus === 'done' && p.text);
+    if (!done.length) { proofCard.hidden = true; return; }
+    const { analyzeBook } = await import('./proofread.js');
+    const r = await analyzeBook(done, { ignored: book.proofIgnore || [] });
+    if (run !== proofRun) return;
+    const auto = new Set(r.fixes.map((f) => f.from)).size, rev = new Set(r.review.map((x) => x.word)).size;
+    if (!auto && !rev) {
+      proofCard.hidden = false;
+      proofCard.className = 'card issues ok proof-card';
+      proofCard.replaceChildren(h('span', { class: 'row gap-s' }, icon('check'), 'Textprüfung: keine zweifelhaften Wörter gefunden.'));
+      return;
+    }
+    proofCard.hidden = false;
+    proofCard.className = 'card issues proof-card';
+    const parts = [];
+    if (auto) parts.push(`${auto} eindeutige Lesefehler (werden automatisch korrigiert)`);
+    if (rev) parts.push(`${rev} zweifelhafte Wörter zum Ansehen`);
+    proofCard.replaceChildren(h('div', { class: 'issue' },
+      h('span', { class: 'grow' }, h('strong', {}, 'Textprüfung: '), parts.join(', ') + '.'),
+      h('button', { class: 'btn small primary', onClick: () => go('#/pruefen/' + bookId) }, icon('check'), 'Prüfen')));
   }
 
   function pageTile(p, i) {
@@ -826,6 +872,7 @@ async function renderBook(bookId) {
         const list = failed.length ? failed : withImg;
         for (const p of list) { await db.updatePage(p.id, { ocrStatus: 'pending' }); ocr.enqueue(p.id); }
       } }, icon('refresh'), 'Text neu erkennen'),
+      h('button', { class: 'menu-item', onClick: () => { s.close(); go('#/pruefen/' + bookId); } }, icon('check'), 'Text prüfen (Lesefehler finden)'),
       h('button', { class: 'menu-item danger', onClick: async () => {
         s.close();
         if (await confirmDialog('Buch löschen?', `„${book.title}“ mit allen Seiten wird von diesem Gerät gelöscht.`, 'Löschen', true)) {

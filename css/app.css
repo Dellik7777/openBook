@@ -615,6 +615,11 @@ html.locked #app { visibility: hidden; }
 .tts-voice .tts-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: underline dotted rgba(255,255,255,.5); text-underline-offset: 3px; }
 .voice-q { font: 600 11px var(--font-ui); padding: 2px 6px; border-radius: 4px; background: var(--line, #e3e3e3); color: var(--muted, #666); }
 .voice-q.q3, .voice-q.q2 { background: #F28C28; color: #fff; }
+.voice-head { margin: 8px 0 0; font: 600 13px var(--font-ui); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.own-voice { display: flex; align-items: center; gap: 4px; }
+.own-voice .voice-item { flex: 1; min-width: 0; }
+.voice-item .voice-desc { display: block; font-weight: 400; }
+.own-voices .progress { margin: 0 0 8px; }
 .voice-help summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .voice-help p { margin: 6px 0; }
 .tts-rate { background: #3B4760; color: #fff; border: 0; border-radius: 4px; font: 600 13px var(--font-ui); padding: 6px 10px; }
@@ -760,3 +765,15 @@ html.locked #app { visibility: hidden; }
 .ce-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; padding: 8px 12px calc(12px + env(safe-area-inset-bottom)); }
 .ce-actions .btn { min-height: 44px; }
 .corner-editor .btn:not(.primary) { background: #273041; color: #fff; border-color: #3B4760; }
+
+/* Textprüfung */
+.proof-body { padding: 16px; max-width: 720px; margin: 0 auto; }
+.proof-item { display: flex; flex-direction: column; gap: 8px; }
+.proof-word { font-size: 18px; }
+.proof-crop { max-width: 100%; height: auto; border-radius: 4px; border: 1px solid var(--line); background: #fff; }
+.proof-context { margin: 0; font-family: var(--font-read, Literata, Georgia, serif); line-height: 1.5; }
+.proof-context mark { background: rgba(242, 140, 40, .3); color: inherit; padding: 0 2px; border-radius: 2px; }
+.proof-auto strong { display: flex; align-items: center; gap: 6px; }
+.proof-fixed { margin: 6px 0; word-break: break-word; }
+.lookup-hit { text-align: left; font-family: var(--font-read, Literata, Georgia, serif); font-size: 15px; line-height: 1.45; }
+.lookup-hit mark { background: rgba(242, 140, 40, .3); color: inherit; padding: 0 2px; border-radius: 2px; }

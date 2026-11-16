@@ -513,7 +513,12 @@ function buildBlocks(lines, quotes = null) {
     // Fette Aufzählungspunkte der obersten Ebene mit Unterpunkten sind Abschnittsüberschriften
     const next = blocks[i + 1];
     const sectionItem = b.type === 'li' && !b.ordered && b.bold && next && next.type === 'li' && next.level > b.level;
-    if ((b.type === 'p' && (big || b.bold)) || sectionItem) {
+    // Kapitelüberschrift in Versalien („ADRIAN CORVIN“, „ERSTES KAPITEL“): oben auf der Seite
+    // oder deutlich abgesetzt, nur Großbuchstaben
+    const prevB = blocks[i - 1];
+    const caps = b.type === 'p' && words <= 6 && /^[\p{Lu}\d][\p{Lu}\d\s\-.'’:]*$/u.test(plain) && (plain.match(/\p{Lu}/gu) || []).length >= 4
+      && (i === 0 || (prevB && b.y - prevB.y > lineH * (prevB.nLines + 1.5)));
+    if ((b.type === 'p' && (big || b.bold || caps)) || sectionItem) {
       b.fromList = b.type === 'li';
       b.type = b.h >= wordH * 1.6 ? 'h1' : 'h2';
       b.md = unbold(b.md); // fett ist bei Überschriften selbstverständlich
