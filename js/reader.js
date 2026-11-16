@@ -968,16 +968,68 @@ export async function openReader(root, bookId) {
         },
       }, icon(v ? 'moon' : 'close'), label))));
     }
-    bar.append(icon('speaker'), h('span', { class: 'grow tts-label' }, 'Vorlesen'), sleepBtn, rateBtn, playBtn, iconButton('stop', 'Vorlesen beenden', () => stop()));
+    const voiceBtn = h('button', { class: 'tts-voice grow', 'aria-label': 'Stimme wählen', onClick: () => openVoices() }, icon('speaker'), h('span', { class: 'tts-label' }, 'Vorlesen'));
+    bar.append(voiceBtn, sleepBtn, rateBtn, playBtn, iconButton('stop', 'Vorlesen beenden', () => stop()));
     view.append(bar);
     const rateTxt = () => (settings.ttsRate || 1).toLocaleString('de-DE', { minimumFractionDigits: 1 }) + '×';
     rateBtn.textContent = rateTxt();
-    function voice() {
-      // Stimmen auf dem Gerät bevorzugen (Online-Stimmen schicken den Text an den Anbieter)
+    // Qualität einer Stimme: Premium > Erweitert > Standard (iOS nennt sie „Anna (Premium)“,
+    // „Anna (Erweitert)“, die voiceURI enthält „premium“ bzw. „enhanced“)
+    const quality = (v) => {
+      const s = (v.name + ' ' + (v.voiceURI || '')).toLowerCase();
+      if (/premium/.test(s)) return 3;
+      if (/enhanced|erweitert|neural|natural/.test(s)) return 2;
+      if (/eloquence|compact|kompakt|grandma|grandpa|oma|opa|rocko|shelley|sandy|reed|flo|eddy/.test(s)) return 0;
+      return 1;
+    };
+    const QUALITY = ['Einfach', 'Standard', 'Erweitert', 'Premium'];
+    function voices() {
       const all = synth.getVoices().filter((v) => /^de(-|_|$)/i.test(v.lang));
-      const vs = all.filter((v) => v.localService !== false).length ? all.filter((v) => v.localService !== false) : all;
-      return vs.find((v) => /premium|enhanced|anna|petra|markus|helena/i.test(v.name)) || vs[0] || null;
+      // Stimmen auf dem Gerät bevorzugen (Online-Stimmen schicken den Text an den Anbieter)
+      const local = all.filter((v) => v.localService !== false);
+      return (local.length ? local : all).sort((a, b) => quality(b) - quality(a) || (/de-DE/i.test(b.lang) - /de-DE/i.test(a.lang)) || a.name.localeCompare(b.name));
     }
+    function voice() {
+      const vs = voices();
+      return (settings.ttsVoice && vs.find((v) => (v.voiceURI || v.name) === settings.ttsVoice)) || vs[0] || null;
+    }
+    const shortName = (v) => v.name.replace(/\s*\(.*\)\s*$/, '').replace(/^.*\.([^.]+)$/, '$1');
+    function voiceLabel() {
+      const v = voice();
+      voiceBtn.lastChild.textContent = v ? shortName(v) : 'Vorlesen';
+    }
+    function sample(v) {
+      synth.cancel();
+      const u = new SpeechSynthesisUtterance('Hallo, so klinge ich, wenn ich dir dein Buch vorlese.');
+      u.lang = 'de-DE'; u.voice = v; u.rate = settings.ttsRate || 1;
+      synth.speak(u);
+    }
+    function openVoices() {
+      const wasActive = active;
+      if (active) pause();
+      const vs = voices();
+      const sel = voice();
+      const list = h('div', { class: 'menu' }, vs.length ? vs.map((v) => h('button', {
+        class: 'menu-item voice-item' + (sel && v === sel ? ' current' : ''),
+        onClick: () => {
+          settings.ttsVoice = v.voiceURI || v.name;
+          saveSettings(settings);
+          list.querySelectorAll('.current').forEach((e) => e.classList.remove('current'));
+          list.querySelectorAll('.voice-item')[vs.indexOf(v)].classList.add('current');
+          voiceLabel();
+          sample(v);
+        },
+      }, icon('speaker'), h('span', { class: 'grow' }, shortName(v)), h('span', { class: 'voice-q q' + quality(v) }, QUALITY[quality(v)]))) : h('p', { class: 'muted' }, 'Auf diesem Gerät ist keine deutsche Stimme installiert.'));
+      const help = h('details', { class: 'voice-help' },
+        h('summary', {}, 'Bessere Stimmen laden'),
+        h('p', { class: 'small' }, 'Die Stimmen kommen vom Gerät. Die besten heißen „Premium“ oder „Erweitert“ und müssen einmal geladen werden (kostenlos, je nach Stimme ca. 100–400 MB):'),
+        h('p', { class: 'small' }, h('b', {}, 'iPhone/iPad: '), 'Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Deutsch → z. B. „Anna“, „Petra“ oder „Yannick“ → die Premium- bzw. Erweitert-Variante laden. Danach Lesepixel neu öffnen.'),
+        h('p', { class: 'small' }, h('b', {}, 'Android: '), 'Einstellungen → Bedienungshilfen → Sprachausgabe (Text-in-Sprache) → Google-Sprachausgabe → Sprachdaten installieren → Deutsch, dort eine Stimme wählen.'),
+        h('p', { class: 'small muted' }, 'Die Siri-Stimmen gibt Apple für Web-Apps leider nicht frei.'));
+      sheet('Stimme', h('div', { class: 'stack' }, list, help), { onClose: () => { synth.cancel(); if (wasActive) play(); } });
+    }
+    // Stimmen werden auf manchen Geräten erst nach und nach geladen
+    try { if (synth && synth.addEventListener) synth.addEventListener('voiceschanged', () => { if (!bar.hidden) voiceLabel(); }); } catch (e) { /* */ }
     function cycleRate() {
       const rates = [0.8, 1, 1.2, 1.4, 1.7];
       const i = rates.indexOf(settings.ttsRate || 1);
@@ -1042,6 +1094,7 @@ export async function openReader(root, bookId) {
       if (settings.mode !== 'text') { switchModeTo('text', pos?.pageIndex ?? 0); }
       active = true;
       bar.hidden = false;
+      voiceLabel();
       playBtn.replaceChildren(icon('pause')); playBtn.setAttribute('aria-label', 'Pause');
       speakFrom(cur || locate(screen));
     }
