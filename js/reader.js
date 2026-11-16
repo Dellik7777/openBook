@@ -989,19 +989,24 @@ export async function openReader(root, bookId) {
       const local = all.filter((v) => v.localService !== false);
       return (local.length ? local : all).sort((a, b) => quality(b) - quality(a) || (/de-DE/i.test(b.lang) - /de-DE/i.test(a.lang)) || a.name.localeCompare(b.name));
     }
+    // „Systemstimme“: keine Stimme vorgeben, nur die Sprache – das Gerät nimmt dann seine
+    // Standardstimme (auf manchen Geräten die in den Einstellungen gewählte)
+    const SYSTEM = 'system';
+    const useSystem = () => settings.ttsVoice === SYSTEM;
     function voice() {
+      if (useSystem()) return null;
       const vs = voices();
       return (settings.ttsVoice && vs.find((v) => (v.voiceURI || v.name) === settings.ttsVoice)) || vs[0] || null;
     }
     const shortName = (v) => v.name.replace(/\s*\(.*\)\s*$/, '').replace(/^.*\.([^.]+)$/, '$1');
     function voiceLabel() {
       const v = voice();
-      voiceBtn.lastChild.textContent = v ? shortName(v) : 'Vorlesen';
+      voiceBtn.lastChild.textContent = useSystem() ? 'Systemstimme' : v ? shortName(v) : 'Vorlesen';
     }
     function sample(v) {
       synth.cancel();
       const u = new SpeechSynthesisUtterance('Hallo, so klinge ich, wenn ich dir dein Buch vorlese.');
-      u.lang = 'de-DE'; u.voice = v; u.rate = settings.ttsRate || 1;
+      u.lang = 'de-DE'; if (v) u.voice = v; u.rate = settings.ttsRate || 1;
       synth.speak(u);
     }
     function openVoices() {
@@ -1009,24 +1014,30 @@ export async function openReader(root, bookId) {
       if (active) pause();
       const vs = voices();
       const sel = voice();
-      const list = h('div', { class: 'menu' }, vs.length ? vs.map((v) => h('button', {
-        class: 'menu-item voice-item' + (sel && v === sel ? ' current' : ''),
+      const entries = [{ system: true }, ...vs];
+      const isSel = (e) => (e.system ? useSystem() : !useSystem() && sel === e);
+      const list = h('div', { class: 'menu' }, entries.map((e, i) => h('button', {
+        class: 'menu-item voice-item' + (isSel(e) ? ' current' : ''),
         onClick: () => {
-          settings.ttsVoice = v.voiceURI || v.name;
+          settings.ttsVoice = e.system ? SYSTEM : e.voiceURI || e.name;
           saveSettings(settings);
-          list.querySelectorAll('.current').forEach((e) => e.classList.remove('current'));
-          list.querySelectorAll('.voice-item')[vs.indexOf(v)].classList.add('current');
+          list.querySelectorAll('.current').forEach((x) => x.classList.remove('current'));
+          list.querySelectorAll('.voice-item')[i].classList.add('current');
           voiceLabel();
-          sample(v);
+          sample(e.system ? null : e);
         },
-      }, icon('speaker'), h('span', { class: 'grow' }, shortName(v)), h('span', { class: 'voice-q q' + quality(v) }, QUALITY[quality(v)]))) : h('p', { class: 'muted' }, 'Auf diesem Gerät ist keine deutsche Stimme installiert.'));
+      }, icon('speaker'), h('span', { class: 'grow' }, e.system ? 'Systemstimme' : shortName(e)),
+      e.system ? h('span', { class: 'voice-q' }, 'Gerät') : h('span', { class: 'voice-q q' + quality(e) }, QUALITY[quality(e)]))));
+      // iOS/Safari reicht selbst geladene Premium-Stimmen nicht an Web-Apps weiter
+      const onlySimple = !vs.some((v) => quality(v) >= 2);
+      const note = onlySimple ? h('p', { class: 'small muted' }, 'Hier erscheinen nur die Stimmen, die der Browser freigibt. Safari auf iPhone/iPad gibt selbst geladene Premium-Stimmen (z. B. „Petra (Premium)“) nicht an Web-Apps weiter. Probier „Systemstimme“: Manche Geräte lesen dann mit der Stimme aus den Einstellungen vor.') : null;
       const help = h('details', { class: 'voice-help' },
         h('summary', {}, 'Bessere Stimmen laden'),
         h('p', { class: 'small' }, 'Die Stimmen kommen vom Gerät. Die besten heißen „Premium“ oder „Erweitert“ und müssen einmal geladen werden (kostenlos, je nach Stimme ca. 100–400 MB):'),
-        h('p', { class: 'small' }, h('b', {}, 'iPhone/iPad: '), 'Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Deutsch → z. B. „Anna“, „Petra“ oder „Yannick“ → die Premium- bzw. Erweitert-Variante laden. Danach Lesepixel neu öffnen.'),
+        h('p', { class: 'small' }, h('b', {}, 'iPhone/iPad: '), 'Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Deutsch → z. B. „Anna“, „Petra“ oder „Yannick“ → die Premium- bzw. Erweitert-Variante laden. Danach Lesepixel neu öffnen. Ob Safari sie an Lesepixel weitergibt, entscheidet Apple.'),
         h('p', { class: 'small' }, h('b', {}, 'Android: '), 'Einstellungen → Bedienungshilfen → Sprachausgabe (Text-in-Sprache) → Google-Sprachausgabe → Sprachdaten installieren → Deutsch, dort eine Stimme wählen.'),
         h('p', { class: 'small muted' }, 'Die Siri-Stimmen gibt Apple für Web-Apps leider nicht frei.'));
-      sheet('Stimme', h('div', { class: 'stack' }, list, help), { onClose: () => { synth.cancel(); if (wasActive) play(); } });
+      sheet('Stimme', h('div', { class: 'stack' }, list, note, help), { onClose: () => { synth.cancel(); if (wasActive) play(); } });
     }
     // Stimmen werden auf manchen Geräten erst nach und nach geladen
     try { if (synth && synth.addEventListener) synth.addEventListener('voiceschanged', () => { if (!bar.hidden) voiceLabel(); }); } catch (e) { /* */ }
