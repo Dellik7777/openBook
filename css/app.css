@@ -777,3 +777,6 @@ html.locked #app { visibility: hidden; }
 .proof-fixed { margin: 6px 0; word-break: break-word; }
 .lookup-hit { text-align: left; font-family: var(--font-read, Literata, Georgia, serif); font-size: 15px; line-height: 1.45; }
 .lookup-hit mark { background: rgba(242, 140, 40, .3); color: inherit; padding: 0 2px; border-radius: 2px; }
+.version-line { text-align: center; margin-top: 8px; }
+.news-list { margin: 6px 0 0; padding-left: 20px; line-height: 1.5; }
+.news-list li { margin: 4px 0; }

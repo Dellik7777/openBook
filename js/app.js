@@ -27,6 +27,7 @@ async function vaultForBackup(bookIds = null) {
 import { searchLibrary, setJump } from './search.js';
 import { bookSize, shrinkPhotos, deletePhotos, fmtBytes } from './storage.js';
 import { getStats, dayKey } from './stats.js';
+import { VERSION, BUILD, NOTES, HEADLINE, dateText } from './version.js';
 
 // Lesestatus je Profil: 'want' (will ich lesen), 'reading', 'done' (gelesen)
 export const STATUS = { reading: 'Lese ich', want: 'Will ich lesen', done: 'Gelesen' };
@@ -149,6 +150,7 @@ async function renderLibrary({ folderId = null, tag = null } = {}) {
       ),
     ),
     usageCard(),
+    newsCard((await db.getBooks()).length > 0),
     await backupReminder(),
     goalEl,
     h('div', { class: 'search-wrap' }, icon('search'), searchInput),
@@ -396,6 +398,35 @@ async function tagEditor(initial) {
   const el = h('div', { class: 'stack-s' }, chips, input, sugg);
   el.value = () => { add(); return tags; };
   return el;
+}
+
+// ---------- Version ----------
+
+function versionLine(before = null) {
+  return h('p', { class: 'muted small version-line' }, `Lesepixel ${VERSION} · Stand ${dateText()} · ${BUILD} · `,
+    h('button', { class: 'linkish small', onClick: () => { if (before) before(); showNews(); } }, 'Was ist neu?'));
+}
+function showNews() {
+  sheet(`Neu in Lesepixel ${VERSION}`, h('div', { class: 'stack' },
+    ...NOTES.map(([v, items]) => h('div', {},
+      h('h4', { class: 'voice-head' }, 'Version ' + v),
+      h('ul', { class: 'news-list' }, ...items.map((t) => h('li', {}, t))))),
+    h('p', { class: 'muted small' }, `Installiert: Lesepixel ${VERSION} (${BUILD}), Stand ${dateText()}.`)));
+}
+// Einmal nach einem Update: kurzer Hinweis „Neu in Version …“
+function newsCard(hasBooks) {
+  let seen = '';
+  try { seen = localStorage.getItem('ob.seenVersion') || ''; } catch (e) { /* */ }
+  if (seen === VERSION) return null;
+  const mark = () => { try { localStorage.setItem('ob.seenVersion', VERSION); } catch (e) { /* */ } };
+  if (!hasBooks) { mark(); return null; } // ganz neue Nutzer brauchen keinen Änderungshinweis
+  const card = h('div', { class: 'card notice news-card' },
+    h('strong', {}, `Neu in Lesepixel ${VERSION}`),
+    h('p', { class: 'small' }, HEADLINE),
+    h('div', { class: 'row gap-s wrap' },
+      h('button', { class: 'btn small primary', onClick: () => { mark(); card.remove(); showNews(); } }, 'Alles ansehen'),
+      h('button', { class: 'btn small', onClick: () => { mark(); card.remove(); } }, 'Ausblenden')));
+  return card;
 }
 
 // Erinnerung an die Sicherung
@@ -1056,6 +1087,7 @@ async function openSettings() {
     ),
     h('p', { class: 'muted small' }, 'Die Texterkennung läuft lokal. Fotos werden nur hochgeladen, wenn du „Fotos mitsichern“ einschaltest. Ohne Synchronisierung bleibt alles nur auf diesem Gerät.'),
     h('a', { class: 'btn small', href: '#/rechtliches', onClick: () => s.close() }, 'Rechtliches: Nutzung, Datenschutz, Lizenzen'),
+    versionLine(() => s.close()),
   ), { onClose: () => syncEl._off() });
 }
 
