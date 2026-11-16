@@ -568,6 +568,31 @@ export async function openReader(root, bookId) {
             ),
           )) : [h('p', { class: 'muted' }, 'Noch keine Markierungen. Text lange antippen bzw. markieren und eine Farbe wählen.')]),
         );
+      } else if (which === 'names') {
+        list.replaceChildren(h('p', { class: 'muted small' }, 'Suche Namen im Buch …'));
+        import('./names.js').then((m) => m.findNames(flow)).then((names) => {
+          if (!names.length) { list.replaceChildren(h('p', { class: 'muted' }, 'Keine wiederkehrenden Namen gefunden.')); return; }
+          const snip = (hit) => {
+            const tx = flow[hit.i].text || '';
+            const a = Math.max(0, hit.char - 45);
+            const word = (tx.slice(hit.char).match(/^[\p{L}-]+/u) || [''])[0];
+            return h('span', { class: 'name-snip' }, (a ? '…' : '') + tx.slice(a, hit.char), h('mark', {}, word), tx.slice(hit.char + word.length, hit.char + word.length + 45) + '…');
+          };
+          const go = (hit) => { s.close(); userNav(); closeMenu(); if (settings.mode !== 'text') switchModeTo('text', flow[hit.i].pageIndex); goToFlow(hit.i, hit.char); };
+          list.replaceChildren(h('p', { class: 'muted small' }, 'Personen und Orte, die im Buch mehrfach vorkommen – automatisch erkannt. Antippen zeigt alle Stellen.'),
+            ...names.slice(0, 80).map((n) => {
+              const more = h('div', { class: 'name-hits', hidden: true });
+              const item = h('div', { class: 'name-item' },
+                h('button', { class: 'menu-item multi', onClick: () => {
+                  if (!more.childNodes.length) more.append(...n.hits.slice(0, 30).map((hit) => h('button', { class: 'menu-item lookup-hit name-hit', onClick: () => go(hit) }, h('span', {}, h('span', { class: 'muted small name-page' }, pageLabel(flow[hit.i].pageIndex)), snip(hit)))));
+                  more.hidden = !more.hidden;
+                } },
+                h('span', { class: 'grow' }, h('strong', {}, n.name), h('br'), h('span', { class: 'muted small' }, `${n.count}× · zuerst ${pageLabel(flow[n.first.i].pageIndex).replace('Seite ', 'S. ')}`)),
+                h('span', { class: 'name-count' }, String(n.count))),
+                more);
+              return item;
+            }));
+        }).catch((e) => list.replaceChildren(h('p', { class: 'muted' }, 'Namen konnten nicht ermittelt werden: ' + e.message)));
       } else if (which === 'bm') {
         const bms = [...(state.bookmarks || [])].sort((a, b) => globalOf(a) - globalOf(b));
         list.replaceChildren(...(bms.length ? bms.map((b) => h('button', { class: 'menu-item multi', onClick: () => { s.close(); jumpTo(b); } },
@@ -585,6 +610,7 @@ export async function openReader(root, bookId) {
     if (toc.length) tabs.append(h('button', { 'data-t': 'toc', onClick: () => show('toc') }, 'Inhalt'));
     tabs.append(
       h('button', { 'data-t': 'hl', onClick: () => show('hl') }, 'Markiert'),
+      h('button', { 'data-t': 'names', onClick: () => show('names') }, 'Namen'),
       h('button', { 'data-t': 'bm', onClick: () => show('bm') }, 'Lesez.'),
       h('button', { 'data-t': 'pages', onClick: () => show('pages') }, 'Seiten'),
     );

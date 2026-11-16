@@ -52,6 +52,7 @@ const SHELL_FILES = [
   'js/piper-worker.js',
   'js/proofread.js',
   'js/proofview.js',
+  'js/names.js',
   'js/config.js',
   'js/version.js',
   'js/sync/sync.js',
