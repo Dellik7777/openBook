@@ -48,7 +48,7 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Zwei Spalten im Querformat** auf dem Tablet
 - **Lesestatistik:** Lesezeit pro Tag, Tage in Folge, meistgelesene Bücher – mit Sync über alle Geräte zusammengezählt
 - **Tagesziel** (z. B. 20 Minuten) mit Fortschritt in der Bibliothek
-- **Wort nachschlagen:** markieren → Wikipedia-Kurzartikel, Links zu Duden, DWDS, Wiktionary und DeepL
+- **Wort nachschlagen:** markieren → Wikipedia-Kurzartikel (bleibt gespeichert, auch offline abrufbar), **Fundstellen im Buch** (offline, z. B. „wer war noch mal Hollmann?“), Links zu Duden, DWDS, Wiktionary und DeepL
 - **Lernkarten aus Markierungen:** Lückentext oder Frage (Notiz mit „?“), Wiederholung nach dem Karteikasten-Prinzip
 - **Schlaf-Timer** beim Vorlesen (5–60 Minuten oder bis Kapitelende)
 - **Fußnoten antippen** zeigt den Fußnotentext, **Tabellen** werden als Tabellen dargestellt
@@ -78,7 +78,7 @@ Lesepixel ist eine Web-App (PWA) fürs Handy. Du fotografierst die Seiten eigene
 - **Suche über alle Bücher** (Titel, Autor, Tags, Text) – ein Treffer öffnet den Leser an der Stelle
 - **App-Sperre mit Face ID / Touch ID** und PIN, wahlweise für die ganze App oder einzelne Bücher
 - **Gesperrte Bücher werden verschlüsselt** (AES-256-GCM): Texte, Fotos, Abbildungen, Markierungen und Lesezeichen liegen nur verschlüsselt im Speicher. Den Schlüssel öffnet die PIN – und Face ID, wenn das Gerät die WebAuthn-Erweiterung PRF kann (iOS 18, aktuelle Android-Geräte)
-- **Erinnerung an die Sicherung** und **Speicher sparen** (Fotos verkleinern oder löschen, Text bleibt)
+- **Erinnerung an die Sicherung** (entfällt bei Cloud-Abgleich mit Fotos), **Warnung im iPhone-Safari-Tab** (dort kann iOS nach 7 Tagen ohne Nutzung alles löschen – als Home-Bildschirm-App nicht) und **Speicher sparen** (Fotos verkleinern oder löschen, Text bleibt)
 - Unsicher erkannte Wörter werden im Editor zum Prüfen angeboten
 - Seiten-Editor: drehen, zuschneiden, verschieben, löschen, Text korrigieren, neu erkennen, Seitenzahl korrigieren, **Abbildungen markieren** (Beschriftungen in der Abbildung landen dann nicht im Lesetext)
 - **EPUB-Export**, z. B. für „Send to Kindle“, Apple Books oder Tolino

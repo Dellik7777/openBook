@@ -399,9 +399,25 @@ async function tagEditor(initial) {
 }
 
 // Erinnerung an die Sicherung
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isInstalled = () => !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
 async function backupReminder() {
   const books = await db.getBooks();
   if (!books.length) return null;
+  // Dauerhaften Speicher anfragen (iPhone: wird als Home-Bildschirm-App gewährt)
+  db.requestPersistence();
+  // Safari löscht Daten von Websites, die 7 Tage nicht geöffnet wurden – außer bei Apps auf dem Home-Bildschirm
+  let hideIos = 0;
+  try { hideIos = +localStorage.getItem('ob.iosHint') || 0; } catch (e) { /* */ }
+  if (isIOS() && !isInstalled() && Date.now() > hideIos) {
+    const card = h('div', { class: 'card notice' },
+      h('strong', {}, 'Wichtig: Lesepixel zum Home-Bildschirm hinzufügen'),
+      h('p', { class: 'small' }, 'Im Safari-Tab kann iOS alle Bücher und Fotos löschen, wenn du die Seite 7 Tage nicht öffnest. Als App auf dem Home-Bildschirm passiert das nicht: in Safari auf „Teilen“ tippen → „Zum Home-Bildschirm“, dann Lesepixel von dort öffnen.'),
+      h('button', { class: 'btn small', onClick: () => { try { localStorage.setItem('ob.iosHint', String(Date.now() + 3 * 86400000)); } catch (e) { /* */ } card.remove(); } }, 'Später erinnern'));
+    return card;
+  }
+  // Mit Cloud-Abgleich samt Fotos ist alles doppelt vorhanden → keine Erinnerung nötig
+  if (sync.getProvider() && sync.photosEnabled()) return null;
   const last = (await db.getMeta('lastBackupAt', 0)) || 0;
   let snooze = 0;
   try { snooze = +localStorage.getItem('ob.backupSnooze') || 0; } catch (e) { /* */ }

@@ -51,27 +51,61 @@ export function links(term) {
   ];
 }
 
-export function openLookup(rawTerm) {
+// Nachgeschlagene Kurzartikel bleiben gespeichert (auch offline wieder abrufbar)
+const CACHE_KEY = 'ob.lookupCache';
+function cacheGet(term) {
+  try { const c = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); return c[term.toLowerCase()] || null; } catch (e) { return null; }
+}
+function cachePut(term, r) {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+    c[term.toLowerCase()] = { ...r, at: Date.now() };
+    const keys = Object.keys(c);
+    if (keys.length > 300) keys.sort((a, b) => c[a].at - c[b].at).slice(0, keys.length - 300).forEach((k) => delete c[k]);
+    localStorage.setItem(CACHE_KEY, JSON.stringify(c));
+  } catch (e) { /* voll → egal */ }
+}
+
+// opts.occurrences(term) → [{ before, word, after, go() }]: Fundstellen im aktuellen Buch
+export function openLookup(rawTerm, { occurrences = null } = {}) {
   const term = cleanTerm(rawTerm).slice(0, 80);
   if (!term) return;
   const result = h('div', { class: 'lookup-result' });
+  let s = null;
+  const inBook = occurrences ? occurrences(term) : [];
+  const bookBox = inBook.length > 1 ? h('div', { class: 'stack lookup-book' },
+    h('h4', { class: 'voice-head' }, `Im Buch (${inBook.length >= 6 ? 'mehr als 5' : inBook.length}×)`),
+    ...inBook.slice(0, 5).map((o) => h('button', { class: 'menu-item lookup-hit', onClick: () => { s && s.close(); o.go(); } },
+      h('span', {}, o.before, h('mark', {}, o.word), o.after)))) : null;
   const load = async () => {
-    if (!navigator.onLine) { result.replaceChildren(h('p', { class: 'muted small' }, 'Offline – Nachschlagen braucht eine Internetverbindung.')); return; }
+    const cached = cacheGet(term);
+    if (!navigator.onLine) {
+      if (cached) { show(cached, true); return; }
+      result.replaceChildren(h('p', { class: 'muted small' }, 'Offline – dieses Wort wurde noch nie nachgeschlagen. Wikipedia braucht eine Internetverbindung; bereits nachgeschlagene Wörter sind auch offline verfügbar.'));
+      return;
+    }
+    if (cached && Date.now() - cached.at < 30 * 86400000) { show(cached, false); return; }
     result.replaceChildren(h('p', { class: 'muted small' }, h('span', { class: 'spinner' }), ' Suche bei Wikipedia …'));
     try {
       const r = await wikiSummary(term);
       if (!r) { result.replaceChildren(h('p', { class: 'muted small' }, `Kein Wikipedia-Artikel zu „${term}“ gefunden.`)); return; }
-      result.replaceChildren(
-        h('h3', { class: 'lookup-title' }, r.title, r.guessed ? h('span', { class: 'muted small' }, ' (ähnlicher Begriff)') : null),
-        h('p', { class: 'lookup-extract' }, r.extract.length > 700 ? r.extract.slice(0, 700).replace(/\s\S*$/, '') + ' …' : r.extract),
-        h('p', { class: 'muted small' }, 'Quelle: ', h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer' }, 'Wikipedia'), ' · CC BY-SA 4.0'),
-      );
+      cachePut(term, r);
+      show(r, false);
     } catch (e) {
+      if (cached) { show(cached, true); return; }
       result.replaceChildren(h('p', { class: 'muted small' }, 'Nachschlagen nicht möglich: ' + e.message));
     }
   };
-  sheet('Nachschlagen', h('div', { class: 'stack' },
+  function show(r, offline) {
+      result.replaceChildren(
+        h('h3', { class: 'lookup-title' }, r.title, r.guessed ? h('span', { class: 'muted small' }, ' (ähnlicher Begriff)') : null),
+        h('p', { class: 'lookup-extract' }, r.extract.length > 700 ? r.extract.slice(0, 700).replace(/\s\S*$/, '') + ' …' : r.extract),
+        h('p', { class: 'muted small' }, 'Quelle: ', h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer' }, 'Wikipedia'), ' · CC BY-SA 4.0', offline ? ' · gespeichert (offline)' : ''),
+      );
+  }
+  s = sheet('Nachschlagen', h('div', { class: 'stack' },
     h('p', { class: 'lookup-term' }, icon('search'), ' ', h('strong', {}, term)),
+    bookBox,
     result,
     h('div', { class: 'row gap-s wrap' }, ...links(term).map(([label, url]) => h('a', { class: 'btn small', href: url, target: '_blank', rel: 'noopener noreferrer' }, label))),
     h('p', { class: 'muted small' }, 'Beim Nachschlagen wird nur das markierte Wort an Wikipedia bzw. das gewählte Wörterbuch gesendet.'),

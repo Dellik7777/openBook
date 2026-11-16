@@ -775,3 +775,5 @@ html.locked #app { visibility: hidden; }
 .proof-context mark { background: rgba(242, 140, 40, .3); color: inherit; padding: 0 2px; border-radius: 2px; }
 .proof-auto strong { display: flex; align-items: center; gap: 6px; }
 .proof-fixed { margin: 6px 0; word-break: break-word; }
+.lookup-hit { text-align: left; font-family: var(--font-read, Literata, Georgia, serif); font-size: 15px; line-height: 1.45; }
+.lookup-hit mark { background: rgba(242, 140, 40, .3); color: inherit; padding: 0 2px; border-radius: 2px; }

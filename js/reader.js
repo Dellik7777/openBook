@@ -824,7 +824,23 @@ export async function openReader(root, bookId) {
       const term = String(window.getSelection()).trim();
       hideHlBar();
       const { openLookup } = await import('./lookup.js');
-      openLookup(term.split(/\s+/).length > 4 ? term.split(/\s+/).slice(0, 4).join(' ') : term);
+      openLookup(term.split(/\s+/).length > 4 ? term.split(/\s+/).slice(0, 4).join(' ') : term, {
+        // Wo kommt das Wort sonst im Buch vor? (funktioniert offline, z. B. für Namen)
+        occurrences: (t) => {
+          const esc = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const re = new RegExp(`(^|[^\\p{L}])(${esc})(?![\\p{L}])`, 'iu');
+          const out = [];
+          for (let fi = 0; fi < flow.length && out.length < 6; fi++) {
+            const tx = flow[fi].text;
+            if (!tx) continue;
+            const m = tx.match(re);
+            if (!m) continue;
+            const i = m.index + m[1].length;
+            out.push({ before: (i > 50 ? '…' : '') + tx.slice(Math.max(0, i - 50), i), word: m[2], after: tx.slice(i + m[2].length, i + m[2].length + 50) + '…', go: () => goToFlow(fi, i) });
+          }
+          return out;
+        },
+      });
     } }, icon('globe'), 'Nachschlagen'),
   );
   view.append(hlBar);
